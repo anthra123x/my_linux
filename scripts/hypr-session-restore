@@ -1,0 +1,205 @@
+#!/usr/bin/env python3
+"""Relanza las ventanas que Hyprland tenia abiertas al cerrar la sesion.
+
+Para cada clase de ventana busca el .desktop correspondiente, saca de su linea
+Exec el comando real de launch y lo ejecuta. Si la app ya esta corriendo no
+hace nada, para no duplicar.
+
+Salida esperada: ~/.local/state/hypr-session/apps.json (la escribe
+hypr-session-save).
+"""
+
+import json
+import os
+import shlex
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+STATE_FILE = Path.home() / ".local/state/hypr-session/apps.json"
+DESKTOP_DIRS = [
+    Path.home() / ".local/share/applications",
+    Path("/usr/local/share/applications"),
+    Path("/usr/share/applications"),
+]
+
+# Apps que no tienen .desktop util o cuya linea Exec es inutilizable como
+# comando directo. Se lanzan por su nombre plano.
+PLAIN_COMMANDS = {
+    "com.mitchellh.ghostty": "ghostty",
+    "ghostty": "ghostty",
+    "kitty": "kitty",
+    "alacritty": "alacritty",
+    "foot": "foot",
+    "konsole": "konsole",
+    "wezterm": "wezterm",
+    "dolphin": "dolphin",
+    "thunar": "thunar",
+    "nautilus": "nautilus",
+    "nemo": "nemo",
+    "firefox": "firefox",
+    "zen-browser": "zen-browser",
+    "brave": "brave",
+    "chromium": "chromium",
+    "antigravity-ide": "antigravity",
+    "antigravity": "antigravity",
+    "org.kde.dolphin": "dolphin",
+    "org.gnome.Nautilus": "nautilus",
+    "org.mozilla.firefox": "firefox",
+}
+
+# Clases que nunca hay que relanzar.
+SKIP = {"quickshell", "org.quickshell", "qs", "hyprlock"}
+
+
+def parse_desktop(path: Path) -> dict:
+    """Devuelve los campos interesting de un .desktop."""
+    fields = {}
+    try:
+        for raw in path.read_text(errors="replace").splitlines():
+            raw = raw.strip()
+            if not raw or raw.startswith("#"):
+                continue
+            if "=" not in raw:
+                continue
+            key, _, val = raw.partition("=")
+            fields.setdefault(key.strip(), val.strip())
+    except OSError:
+        pass
+    return fields
+
+
+def desktop_candidates():
+    """(Exec, StartupWMClass, basename) de todos los .desktop del sistema."""
+    for d in DESKTOP_DIRS:
+        if not d.is_dir():
+            continue
+        for p in sorted(d.glob("*.desktop")):
+            f = parse_desktop(p)
+            if "Exec" in f and f.get("Type", "Application") == "Application":
+                yield f.get("Exec", ""), f.get("StartupWMClass", ""), p.stem
+
+
+def clean_exec(exec_line: str) -> str | None:
+    """Quita los marcadores de campo %f %u %U %i %c %k de una linea Exec y
+    descarta las que no se pueden ejecutar tal cual (Terminal=, DBusActivatable
+    sin Exec real, etc.)."""
+    if not exec_line:
+        return None
+    if "%" in exec_line and not any(
+        tok in exec_line.split() for tok in ("%f", "%u", "%U", "%F", "%i", "%c", "%k")
+    ):
+        # %s / %Sstyle no se pueden resolver sin saber el archivo
+        pass
+    # Quitamos los codigos de campo sueltos
+    out = []
+    for tok in exec_line.split():
+        if tok in ("%f", "%u", "%U", "%F", "%i", "%c", "%k", "%d", "%D", "%n", "%N", "%v", "%m"):
+            continue
+        out.append(tok)
+    cmd = " ".join(out).strip()
+    return cmd or None
+
+
+def resolve_command(cls: str) -> str | None:
+    """Mejor esfuerzo para encontrar como lanzar esta clase de ventana."""
+    if cls in PLAIN_COMMANDS:
+        return PLAIN_COMMANDS[cls]
+
+    low = cls.lower()
+    # Coincidencia por StartupWMClass: es exactamente la clase de la ventana
+    for exec_line, wm_class, stem in desktop_candidates():
+        if wm_class and wm_class.lower() == low:
+            cmd = clean_exec(exec_line)
+            if cmd:
+                return cmd
+
+    # Coincidencia por nombre de archivo o por el binario en Exec
+    for exec_line, _wm, stem in desktop_candidates():
+        if stem.lower() == low:
+            cmd = clean_exec(exec_line)
+            if cmd:
+                return cmd
+        first = exec_line.split()[0] if exec_line.split() else ""
+        if first and os.path.basename(first).lower() == low:
+            return clean_exec(exec_line)
+
+    return None
+
+
+def running_classes() -> set[str]:
+    try:
+        out = subprocess.run(
+            ["hyprctl", "clients", "-j"], capture_output=True, text=True, timeout=10
+        )
+        if out.returncode != 0 or not out.stdout.strip():
+            return set()
+        return {(w.get("class") or "").lower() for w in json.loads(out.stdout)}
+    except Exception:
+        return set()
+
+
+def focus_workspace(name: str) -> None:
+    if not name or name == "special":
+        return
+    subprocess.run(
+        ["hyprctl", "dispatch", f'hl.dsp.focus({{workspace = "{name}"}})'],
+        capture_output=True,
+        timeout=10,
+    )
+
+
+def main() -> int:
+    if not STATE_FILE.exists():
+        print("hypr-session-restore: no hay estado guardado, nada que hacer")
+        return 0
+
+    try:
+        saved = json.loads(STATE_FILE.read_text())
+    except (json.JSONDecodeError, OSError) as exc:
+        print(f"hypr-session-restore: estado ilegible ({exc})")
+        return 0
+
+    if not saved:
+        return 0
+
+    # Le damos tiempo al shell y a los portales a arrancar antes de lanzar apps
+    time.sleep(6)
+
+    already = running_classes()
+    launched = 0
+    skipped = 0
+
+    for entry in saved:
+        cls = entry.get("class") or ""
+        if cls.lower() in SKIP:
+            continue
+        # Si ya hay una ventana de esa clase abierta, no la duplicamos
+        if cls.lower() in already:
+            skipped += 1
+            continue
+
+        cmd = resolve_command(cls)
+        if not cmd:
+            print(f"  - {cls}: no se encontro como lanzarla, se omite")
+            skipped += 1
+            continue
+
+        focus_workspace(entry.get("workspace", ""))
+        subprocess.Popen(
+            ["sh", "-c", cmd],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        already.add(cls.lower())  # evita lanzar dos veces la misma en este bucle
+        launched += 1
+        time.sleep(2.5)  # escalona: several apps a la vez tumba la RAM
+
+    print(f"hypr-session-restore: {launched} relanzada(s), {skipped} omitida(s)")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

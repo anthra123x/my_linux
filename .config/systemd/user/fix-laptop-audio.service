@@ -1,0 +1,14 @@
+[Unit]
+Description=Forzar salida analogica integrada (altavoces) en ASUS E1504GA
+Documentation=man:pactl(1) man:amixer(1)
+After=pipewire.service wireplumber.service pipewire-pulse.service
+Wants=pipewire-pulse.service
+PartOf=pipewire-pulse.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=%h/.local/bin/fix-laptop-audio.sh
+
+[Install]
+WantedBy=default.target

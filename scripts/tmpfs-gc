@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# tmpfs-gc:Collect garbage del tmpfs /tmp en un equipo con 8 GB de RAM.
+#
+# /tmp esta montado como tmpfs (tmp.mount), asi que TODO lo que hay ahi es
+# RAM resident. Sin mantenimiento, los perfiles temporales que Firefox deja
+# al cerrarse a la fuerza se acumulan (llegamos a 8 dirs x 20 MB = 160 MB).
+#
+# El tmpfiles.d del sistema solo limpia /tmp con antiguedad de 10 dias
+# ("q /tmp 1777 root root 10d"), demasiado para este caso.
+#
+# Reglas conservadoras: solo borra directorios /tmp/tmp.XXXXXXXX con el
+# formato exacto de tempfile de Firefox y SIN ningun descriptor de fichero
+# abierto por ningun proceso. No toca nada mas.
+#
+# Uso: tmpfs-gc [--dry-run]
+
+set -euo pipefail
+
+DRY=0
+[ "${1:-}" = "--dry-run" ] && DRY=1
+
+LOG="${XDG_STATE_HOME:-$HOME/.local/state}/tmpfs-gc.log"
+TMPDIR_PATH=/tmp
+# Antiguedad minima antes de considerar un directorio huerfano.
+MIN_AGE_MIN=720   # 12 h
+mkdir -p "$(dirname "$LOG")"
+
+log() { printf '[%s] %s\n' "$(date -Is)" "$*" >>"$LOG"; }
+
+# Devuelve 0 si el directorio no tiene ningun fd abierto en todo el sistema.
+is_unused() {
+  ! lsof +D "$1" >/dev/null 2>&1
+}
+
+freed_kb=0
+reaped=0
+
+# tmp.XXXXXXXX con 8 caracteres alfanumericos (formato tempfile de Python,
+# que es lo que usa Firefox al crear un perfil temporal).
+while IFS= read -r -d '' dir; do
+  name=$(basename "$dir")
+  [ "$name" = "tmp" ] && continue
+
+  # Antiguedad en minutos
+  mtime=$(stat -c %Y "$dir" 2>/dev/null) || continue
+  age_min=$(( ( $(date +%s) - mtime ) / 60 ))
+  [ "$age_min" -lt "$MIN_AGE_MIN" ] && continue
+
+  # Seguridad: debe seguir el patron exacto de Firefox
+  [[ "$name" =~ ^tmp\.[A-Za-z0-9]{8}$ ]] || continue
+
+  # Seguridad: nadie lo tiene abierto
+  if ! is_unused "$dir"; then
+    log "OMITIDO (en uso): $dir"
+    continue
+  fi
+
+  size_kb=$(du -sk "$dir" 2>/dev/null | cut -f1)
+  if [ "$DRY" = "1" ]; then
+    log "DRY-RUN: borraria $dir (${size_kb} KB, ${age_min} min)"
+  else
+    rm -rf -- "$dir"
+    log "BORRADO: $dir (${size_kb} KB, ${age_min} min)"
+  fi
+  freed_kb=$((freed_kb + size_kb))
+  reaped=$((reaped + 1))
+done < <(find "$TMPDIR_PATH" -maxdepth 1 -type d -name 'tmp.*' -print0 2>/dev/null)
+
+# La cache de bytecodes de Node deberia estar en disco (NODE_COMPILE_CACHE).
+# Si reaparece en /tmp es que algun proceso la creo antes de leer
+# environment.d: la eliminamos para forzar el reacomodo.
+if [ -d /tmp/node-compile-cache ] && [ "$DRY" != "1" ]; then
+  ncc_kb=$(du -sk /tmp/node-compile-cache 2>/dev/null | cut -f1)
+  rm -rf /tmp/node-compile-cache
+  freed_kb=$((freed_kb + ${ncc_kb:-0}))
+  log "BORRADO: /tmp/node-compile-cache (${ncc_kb:-0} KB, deveria estar en ~/.cache)"
+fi
+
+# Informe de estado
+used_kb=$(df -k --output=used /tmp 2>/dev/null | tail -1 | tr -d ' ')
+mem_avail=$(awk '/^MemAvailable:/{printf "%d", $2/1024}' /proc/meminfo)
+log "informe: ${reaped} dirs, ${freed_kb} KB liberados, /tmp usa ${used_kb} KB, MemAvailable=${mem_avail} MiB"

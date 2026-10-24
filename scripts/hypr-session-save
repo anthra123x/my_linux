@@ -1,0 +1,139 @@
+#!/usr/bin/env python3
+"""Guarda la lista de ventanas abiertas de Hyprland para restaurarlas al
+volver a iniciar sesion.
+
+Se ejecuta cada 30 s desde un timer de systemd de usuario, no solo al cerrar
+sesion: asi el ultimo estado guardado sigue siendo valido incluso si la
+maquina se apaga de golpe o se cuelga.
+
+Salida: ~/.local/state/hypr-session/apps.json
+"""
+
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+STATE_DIR = Path.home() / ".local/state/hypr-session"
+STATE_FILE = STATE_DIR / "apps.json"
+
+# Ventanas que no tiene sentido relanzar: el shell las levanta solo al
+# arrancar, y el candado de pantalla es del propio sistema.
+SKIP_CLASSES = {
+    "quickshell",
+    "org.quickshell",
+    "qs",
+    "hyprlock",
+    "hypridle",
+    "notify-send",
+}
+
+# Clases que son single-instance: si hay 3 ventanas, alcanza con abrirla una
+# vez y la app restaura el resto de su propio estado.
+SINGLE_INSTANCE_HINTS = (
+    "firefox",
+    "brave",
+    "chromium",
+    "chrome",
+    "zen",
+    "librewolf",
+    "antigravity",
+    "code",
+    "windsurf",
+    "codium",
+    "cursor",
+    "discord",
+    "spotify",
+    "steam",
+    "dolphin",
+    "thunar",
+    "nautilus",
+    "nemo",
+)
+
+
+def clients():
+    """Devuelve los toplevels de Hyprland, o lista vacia si el compositor
+    no responde (pasa durante el arranque de la sesion)."""
+    try:
+        out = subprocess.run(
+            ["hyprctl", "clients", "-j"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return []
+    if out.returncode != 0 or not out.stdout.strip():
+        return []
+    try:
+        return json.loads(out.stdout)
+    except json.JSONDecodeError:
+        return []
+
+
+def is_skippable(cls: str) -> bool:
+    low = (cls or "").lower()
+    if low in SKIP_CLASSES:
+        return True
+    return any(low.startswith(h) for h in SKIP_CLASSES)
+
+
+def main() -> int:
+    windows = clients()
+    if not windows:
+        # Sin compositor no hay nada que guardar. No se pisa el estado previo:
+        # un arranque temprano no debe vaciar la sesion anterior.
+        print("hypr-session-save: hyprctl no respondio, estado previo intacto")
+        return 0
+
+    seen_single: set[str] = set()
+    saved = []
+
+    for w in windows:
+        cls = w.get("class") or ""
+        if not cls or is_skippable(cls):
+            continue
+
+        # Saltamos la sesion de inicio de sesion: Hyprland la crea para cada
+        # cliente, no es una app real.
+        at = w.get("at") or [0, 0]
+        size = w.get("size") or [0, 0]
+
+        low = cls.lower()
+        if any(h in low for h in SINGLE_INSTANCE_HINTS):
+            if low in seen_single:
+                continue
+            seen_single.add(low)
+
+        saved.append(
+            {
+                "class": cls,
+                "title": w.get("title", ""),
+                "workspace": (w.get("workspace") or {}).get("name", ""),
+                "at": at,
+                "size": size,
+                "floating": bool(w.get("floating")),
+                "fullscreen": int(w.get("fullscreen", 0)),
+                "monitor": (w.get("workspace") or {}).get("monitor", ""),
+            }
+        )
+
+    if not saved:
+        # Sesion vacia (recien logueado, todo cerrado): no se guarda para no
+        # perder la lista anterior. El usuario la borra a mano si la quiere.
+        print("hypr-session-save: no hay ventanas que guardar, estado previo intacto")
+        return 0
+
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = STATE_FILE.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(saved, indent=2, ensure_ascii=False))
+    tmp.replace(STATE_FILE)  # atomico: nunca queda un JSON a medias
+
+    print(f"hypr-session-save: {len(saved)} ventana(s) guardada(s)")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

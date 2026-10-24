@@ -1,0 +1,7 @@
+[Unit]
+Description=Garbage-collect disconnected OpenCode headless Firefox workers
+After=graphical-session.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/opencode-browser-gc

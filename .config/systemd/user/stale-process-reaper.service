@@ -1,0 +1,7 @@
+[Unit]
+Description=Eliminar procesos huerfanos que consumen RAM
+Description=Reap orphaned processes that leak memory
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/stale-process-reaper

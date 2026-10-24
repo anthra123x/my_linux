@@ -1,0 +1,12 @@
+[Unit]
+Description=Revisar procesos huerfanos cada 10 minutos
+Description=Check for orphaned processes every 10 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=10min
+AccuracySec=1min
+Unit=stale-process-reaper.service
+
+[Install]
+WantedBy=timers.target

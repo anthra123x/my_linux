@@ -1,0 +1,18 @@
+{
+    "clock": {
+        "timezone": "Asia/Jakarta",
+        "tooltip-format": "<tt>{calendar}</tt>",
+        "format": "󰥔 {:%H:%M | %d %B %Y}",
+        "calendar": {
+          "mode": "year",
+          "mode-mon-col": 3,
+          "on-scroll": 1,
+          "format": {
+            "months": "<span color='#F9F8FE'><b>{}</b></span>",
+            "days": "<span color='#9d4edd'><b>{}</b></span>",
+            "weekdays": "<span color='#ffcc00'><b>{}</b></span>",
+            "today": "<span color='#1A76C9'><b><u>{}</u></b></span>"
+          }
+        }
+    }
+}

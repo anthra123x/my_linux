@@ -1,0 +1,23 @@
+# Backups y temporales
+*.bak*
+*.old
+*~
+*.swp
+*.swo
+
+# Compilados de Python y caches
+__pycache__/
+*.pyc
+*.pyo
+
+# Logs y sockets
+*.log
+*.sock
+
+# Zsh compilados
+*.zwc
+
+# Ficheros sensibles locales
+.env
+*.pem
+*.key

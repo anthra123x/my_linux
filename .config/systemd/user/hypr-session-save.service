@@ -1,0 +1,9 @@
+[Unit]
+Description=Guarda las ventanas abiertas de Hyprland para restaurarlas al reiniciar
+Documentation=man:hyprctl(1)
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/hypr-session-save
+# El guardado no es critico: si falla, el estado previo se conserva.
+SuccessExitStatus=0

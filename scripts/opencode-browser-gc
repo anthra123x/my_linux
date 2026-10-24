@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Reclaim only old, disconnected OpenCode browser workers.
+# A live CDP connection always wins over the age threshold.
+set -euo pipefail
+
+readonly threshold_seconds=1800
+readonly log_file="${XDG_STATE_HOME:-$HOME/.local/state}/opencode-browser-gc.log"
+mkdir -p "$(dirname "$log_file")"
+
+log() {
+  printf '%s %s\n' "$(date -Is)" "$*" >> "$log_file"
+}
+
+mapfile -t pids < <(
+  pgrep -f 'firefox.*--headless.*--remote-debugging-port(=| )9223.*--profile /tmp/opencode/ff-profile' || true
+)
+
+for pid in "${pids[@]}"; do
+  [[ "$pid" =~ ^[0-9]+$ ]] || continue
+  [[ -r "/proc/$pid/cmdline" ]] || continue
+  cmd=$(tr '\0' ' ' < "/proc/$pid/cmdline")
+  [[ "$cmd" == *"--headless"* && "$cmd" == *"--remote-debugging-port"* && "$cmd" == *"/tmp/opencode/ff-profile"* ]] || continue
+
+  # Do not interfere with an attached browser automation session.
+  if ss -Htnp 2>/dev/null | grep -Eq "pid=${pid}[,)]|pid=${pid}[[:space:]]"; then
+    log "skip attached pid=$pid"
+    continue
+  fi
+
+  age=$(ps -p "$pid" -o etimes= 2>/dev/null | tr -d ' ' || true)
+  [[ "$age" =~ ^[0-9]+$ ]] || continue
+  if (( age < threshold_seconds )); then
+    log "skip young pid=$pid age=${age}s"
+    continue
+  fi
+
+  log "terminating disconnected pid=$pid age=${age}s"
+  kill -TERM "$pid" 2>/dev/null || true
+  for _ in {1..20}; do
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 0.25
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    log "force-killing disconnected pid=$pid"
+    kill -KILL "$pid" 2>/dev/null || true
+  fi
+done

@@ -1,0 +1,238 @@
+#!/usr/bin/env bash
+# ============================================================================
+# lidwatch: al cerrar la tapa con un monitor externo conectado, deja el monitor
+# como salida principal.
+#
+# POR QUE HACE FALTA ESTE SCRIPT
+#
+# Hyprland 0.56 quito TODO el soporte de tapa. Comprobado una a una:
+#
+#   - misc.lid_switch ............ eliminado. El registro de claves del binario
+#                                 (140.886 cadenas) no tiene ninguna clave de tapa.
+#   - hyprctl output <x> disable . no-op. Devuelve "ok" pero acepta verbos
+#                                 inventados; en 0.56 `output` solo hace
+#                                 create/remove.
+#   - hl.monitor({disable=true}) . campos inexistentes. Los validos son solo
+#                                 output, mode, position, scale, transform,
+#                                 mirror, bitdepth, cm, vrr.
+#   - mode = "disable" .......... "error applying field 'mode'".
+#   - DPMS por DRM .............. /sys/class/drm/card1-eDP-1/dpms es solo
+#                                 lectura, hace falta root.
+#
+# (hl.dsp.dpms SI funciona en 0.56: baja intel_backlight a 0 y lo devuelve.
+# Pero no se usa aqui porque misc:mouse_move_enables_dpms y
+# misc:key_press_enables_dpms estan en true, asi que el primer movimiento de
+# raton o la primera tecla lo revierten. Ver la nota en switch_to_external.)
+#
+# Es decir: el compositor NO deja apagar eDP-1. Pero con la tapa cerrada ese
+# panel ya no se ve (es el fisico de la laptop), asi que lo que hace falta de
+# verdad es dejar el TRABAJO ahi: mover los escritorios y el foco al monitor.
+#
+# QUE HACE
+#
+#   tapa cerrada + monitor externo -> mueve todos los escritorios del panel
+#                                    interno al externo y le da el foco.
+#   tapa cerrada + SIN monitor    -> suspende. Si no, te quedarias trabajando
+#                                    a ciegas creyendo que la sesion sigue viva.
+#   tapa abierta                   -> devuelve el foco al panel interno.
+#
+# Al abrir la tapa NO mueve los escritorios de vuelta: mantenerlos donde
+# quedaron es lo menos destructivo y deja que decidas tu cuando moverlos.
+#
+# REQUISITOS
+#
+#   1. logind con HandleLidSwitch=ignore (ver 50-lid.conf). Sin esto, logind
+#      suspende al cerrar la tapa y este script no llega a correr nunca.
+#   2. hyprctl reachable. Si HYPRLAND_INSTANCE_SIGNATURE no esta en el
+#      entorno (pasa con servicios systemd --user), se deduce de
+#      `hyprctl instances -j`.
+# ============================================================================
+
+set -uo pipefail
+
+# Los tres se pueden sobreescribir por entorno, sobre todo LIDWATCH_STATE_FILE:
+# asi el camino "tapa cerrada" se puede probar de verdad sin tapa fisica, y
+# LIDWATCH_SUSPEND_CMD permite probar la rama de suspension sin suspender la
+# maquina de verdad.
+LID_STATE_FILE="${LIDWATCH_STATE_FILE:-/proc/acpi/button/lid/LID/state}"
+SUSPEND_CMD="${LIDWATCH_SUSPEND_CMD:-systemctl suspend}"
+POLL_INTERVAL="${LIDWATCH_POLL_INTERVAL:-1}"
+
+# Espera minima entre dos suspensiones seguidas, para no entrar en bucle si la
+# tapa sigue cerrada y el monitor no vuelve.
+SUSPEND_COOLDOWN=60
+
+log() {
+    printf '%s [lidwatch] %s\n' "$(date '+%H:%M:%S')" "$*"
+}
+
+# ---------------------------------------------------------------------------
+# Instancia de Hyprland
+# ---------------------------------------------------------------------------
+
+ensure_instance() {
+    [ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ] && return 0
+
+    local sig
+    sig=$(hyprctl instances -j 2>/dev/null | jq -r '.[0].instance // empty' 2>/dev/null)
+    [ -n "$sig" ] || return 1
+
+    export HYPRLAND_INSTANCE_SIGNATURE="$sig"
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# Lectura del estado
+# ---------------------------------------------------------------------------
+
+# "open" | "closed" | "" (desconocido)
+lid_state() {
+    local raw
+    raw=$(cat "$LID_STATE_FILE" 2>/dev/null) || return 1
+    # El archivo trae "state:      closed"; nos quedamos con el ultimo campo.
+    printf '%s' "$raw" | awk '{print $NF}'
+}
+
+# Nombre del monitor interno, o "" si no hay ninguno.
+# El panel interno es el que se apaga con la tapa; cualquier otra cosa es
+# externo y por tanto vale como pantalla principal.
+internal_monitor() {
+    hyprctl -j monitors 2>/dev/null | jq -r '
+        [ .[] | select(.disabled != true)
+                | select(.name | test("^(eDP|DSI|LVDS)")) | .name ]
+        | .[0] // empty'
+}
+
+# Nombre del primer monitor externo activo, o "" si no hay ninguno.
+external_monitor() {
+    hyprctl -j monitors 2>/dev/null | jq -r '
+        [ .[] | select(.disabled != true)
+                | select(.name | test("^(eDP|DSI|LVDS)") | not) | .name ]
+        | .[0] // empty'
+}
+
+hypr_dispatch() {
+    hyprctl dispatch "$1" >/dev/null 2>&1
+}
+
+# ---------------------------------------------------------------------------
+# Acciones
+# ---------------------------------------------------------------------------
+
+# Mueve al monitor externo todos los escritorios que esten en el interno y le
+# da el foco.
+switch_to_external() {
+    local ext="$1"
+    local int="$2"
+    local workspaces moved=0
+
+    workspaces=$(hyprctl -j workspaces 2>/dev/null \
+        | jq -r --arg m "$int" '.[] | select(.monitor == $m) | .id')
+
+    for ws in $workspaces; do
+        # Hay que enfocar cada escritorio antes de moverlo: workspace.move solo
+        # afecta al activo. Enfocar uno que vive en el panel interno tambien
+        # deja el foco ahi, que es justo lo que queremos.
+        hypr_dispatch "hl.dsp.focus({ workspace = \"$ws\" })"
+        sleep 0.2
+        hypr_dispatch "hl.dsp.workspace.move({ monitor = \"$ext\" })"
+        sleep 0.2
+        moved=$((moved + 1))
+    done
+
+    hypr_dispatch "hl.dsp.focus({ monitor = \"$ext\" })"
+
+    # NO se apaga el panel interno con DPMS: en 0.56 funciona
+    # (hl.dsp.dpms baja intel_backlight a 0), pero con
+    # misc:mouse_move_enables_dpms y misc:key_press_enables_dpms en true lo
+    # revierte el primer movimiento de raton o la primera tecla. Con la tapa
+    # cerrada el usuario va a tocar el raton enseguida, asi que el apagado no
+    # se sostiene; y si no llegara a revertirse, el panel quedaria en negro.
+    # El panel ya es fisicamente invisible con la tapa cerrada, asi que no
+    # compensa el riesgo.
+
+    log "tapa cerrada: $ext es ahora la salida principal ($moved escritorio(s) movidos desde $int)"
+}
+
+# El escritorio que estaba activo en el panel interno se deja como estaba; solo
+# se recupera el foco del panel visible.
+focus_internal() {
+    hypr_dispatch "hl.dsp.focus({ monitor = \"$1\" })"
+}
+
+# ---------------------------------------------------------------------------
+# Bucle principal
+# ---------------------------------------------------------------------------
+
+main() {
+    local last_state="" suspend_ok=1
+
+    # Hyprland puede tardar en aceptar hyprctl durante el arranque.
+    local waited=0
+    while ! ensure_instance; do
+        if [ "$waited" -ge 30 ]; then
+            log "Hyprland no respondio tras 30 s; saliendo."
+            return 1
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+
+    log "vigilando $LID_STATE_FILE (instancia $HYPRLAND_INSTANCE_SIGNATURE)"
+
+    while true; do
+        local state
+        state=$(lid_state)
+
+        if [ -z "$state" ]; then
+            # Sin fichero de estado de tapa: nada que hacer. Se reintenta mas
+            # adelante por si aparece.
+            sleep "$POLL_INTERVAL"
+            continue
+        fi
+
+        if [ "$state" != "$last_state" ]; then
+            log "tapa: $last_state -> $state"
+
+            local int ext
+            int=$(internal_monitor)
+            ext=$(external_monitor)
+
+            if [ "$state" = "closed" ]; then
+                if [ -n "$ext" ]; then
+                    switch_to_external "$ext" "$int"
+                    suspend_ok=1
+                else
+                    log "tapa cerrada sin monitor externo: suspendiendo"
+                    $SUSPEND_CMD
+                    sleep "$SUSPEND_COOLDOWN"
+                    suspend_ok=0
+                fi
+            else
+                if [ -n "$int" ]; then
+                    focus_internal "$int"
+                    log "tapa abierta: foco devuelto a $int"
+                fi
+            fi
+
+            last_state="$state"
+        else
+            # Sin transiciones, pero el monitor externo puede unplugarse con la
+            # tapa ya cerrada. En ese caso hay que suspender igual, asi que la
+            # comprobacion se repite en cada vuelta, no solo al cambiar la tapa.
+            if [ "$state" = "closed" ] && [ "$suspend_ok" -eq 1 ]; then
+                ext=$(external_monitor)
+                if [ -z "$ext" ]; then
+                    log "se perdio el monitor externo con la tapa cerrada: suspendiendo"
+                    $SUSPEND_CMD
+                    sleep "$SUSPEND_COOLDOWN"
+                    suspend_ok=0
+                fi
+            fi
+        fi
+
+        sleep "$POLL_INTERVAL"
+    done
+}
+
+main "$@"

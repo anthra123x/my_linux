@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+# Reaper de procesos huerfanos.
+#
+# Objetivo: que los procesos acumulados no acaben vaciando la RAM y
+# provocando un OOM que tumbe el sistema.
+#
+# Reglas conservadoras: solo se toca lo que es inequivocamente huerfano.
+#   - Clientes OpenCode TUI sin terminal padre (PPid == 1) y > 2 h inactivos.
+#   - Servidores web swarm cuyo servicio OpenCode padre ya no existe.
+#
+# NUNCA toca: opencode serve --service, kitty, Hyprland, qs, Hypridle,
+# greetd, ni cualquier proceso con TTY viva.
+#
+# Uso: stale-process-reaper [--dry-run]
+
+set -euo pipefail
+
+DRY=0
+[ "${1:-}" = "--dry-run" ] && DRY=1
+
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}"
+LOG="$STATE_DIR/stale-process-reaper.log"
+MIN_AGE=7200   # 2 horas
+mkdir -p "$(dirname "$LOG")"
+
+log() { printf '[%s] %s\n' "$(date -Is)" "$*" >>"$LOG"; }
+
+has_live_tty() {
+  local pid=$1
+  local tty
+  tty=$(ps -o tty= -p "$pid" 2>/dev/null | tr -d ' ')
+  [ -n "$tty" ] && [ "$tty" != "?" ] && [ "$tty" != "-" ]
+}
+
+reap() {
+  local pid=$1 reason=$2
+  if [ "$DRY" = "1" ]; then
+    log "DRY-RUN: pid=$pid ($reason) seria terminado: $(ps -o comm=,args= -p "$pid" 2>/dev/null | head -c 120)"
+    return 0
+  fi
+  log "terminando pid=$pid ($reason): $(ps -o comm=,args= -p "$pid" 2>/dev/null | head -c 120)"
+  kill -TERM "$pid" 2>/dev/null || return 0
+  for _ in {1..20}; do
+    kill -0 "$pid" 2>/dev/null || return 0
+    sleep 0.25
+  done
+  kill -KILL "$pid" 2>/dev/null || true
+}
+
+# 1) Clientes Opencode huerfanos (PPid 1, sin TTY, antiguos)
+while read -r pid; do
+  [ -n "$pid" ] || continue
+  [ "$pid" = "1" ] && continue
+  cmd=$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null || true)
+  case "$cmd" in
+    *"--service"*) continue ;;   # el servicio compartido jamas se toca
+  esac
+  ppid=$(awk '/^PPid:/{print $2}' "/proc/$pid/status" 2>/dev/null || echo 0)
+  [ "$ppid" = "1" ] || continue
+  if has_live_tty "$pid"; then continue; fi
+  age=$(ps -p "$pid" -o etimes= 2>/dev/null | tr -d ' ' || echo 0)
+  [ -n "$age" ] && [ "$age" -ge "$MIN_AGE" ] || continue
+  reap "$pid" "opencode-cliente-huerfano ppid=1 age=${age}s"
+done < <(pgrep -x opencode 2>/dev/null || true)
+
+# 2) Servidores web swarm cuyo padre (servicio opencode) ya no existe
+swarm_pids=$(pgrep -f 'opencode/swarm/web/server\.py' 2>/dev/null || true)
+for pid in $swarm_pids; do
+  ppid=$(awk '/^PPid:/{print $2}' "/proc/$pid/status" 2>/dev/null || echo 0)
+  # padre 1 o padre muerto -> huerfano
+  if [ "$ppid" = "1" ] || { [ "$ppid" -gt 1 ] 2>/dev/null && [ ! -d "/proc/$ppid" ]; }; then
+    age=$(ps -p "$pid" -o etimes= 2>/dev/null | tr -d ' ' || echo 0)
+    [ -n "$age" ] && [ "$age" -ge "$MIN_AGE" ] || continue
+    reap "$pid" "swarm-web-huerfano ppid=$ppid age=${age}s"
+  fi
+done
+
+# 3) Informe de memoria (sin actuar)
+avail=$(awk '/MemAvailable/{print $2}' /proc/meminfo)
+log "informe: MemAvailable=$((avail/1024))MiB swap_usado=$(awk '/SwapTotal/{t=$2}/SwapFree/{f=$2}END{print (t-f)/1024 "MiB"}' /proc/meminfo) dry_run=$DRY"

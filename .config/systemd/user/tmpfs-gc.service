@@ -1,0 +1,18 @@
+[Unit]
+Description=Recolectar basura del tmpfs /tmp (equipo con 8 GB de RAM)
+Documentation=man:tmpfiles.d(5)
+# /tmp debe existir y estar montado antes de calcular df sobre el.
+RequiresMountsFor=/tmp
+After=tmp.mount
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/tmpfs-gc
+# El GC es barato: 15 min de timeout y CPU baja para no molestar al escritorio.
+TimeoutStartSec=60
+Nice=19
+IOSchedulingClass=idle
+CPUSchedulingPolicy=idle
+
+[Install]
+WantedBy=default.target

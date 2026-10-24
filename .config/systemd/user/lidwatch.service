@@ -1,0 +1,16 @@
+[Unit]
+# lidwatch vigila la tapa y, al cerrarla con monitor externo, deja el monitor
+# como salida principal. Lo arranca Hyprland desde custom/execs.lua; este
+# servicio existe para que systemd lo gestione (reinicio automatico, logs).
+Description=Lid watcher: deja el monitor externo como salida principal al cerrar la tapa
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/lidwatch
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target
