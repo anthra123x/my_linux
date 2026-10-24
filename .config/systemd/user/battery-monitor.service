@@ -1,0 +1,21 @@
+# This file is yours: it sets what the battery monitor runs. hyprsimple copies it once
+# and never touches it again. Run `systemctl --user daemon-reload` after
+# editing.
+
+[Unit]
+Description=Battery Monitor Service
+After=graphical-session.target
+# Stops with the session. Without this the last run could outlive the
+# compositor and dim a panel nobody is looking at.
+PartOf=graphical-session.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/battery-monitor.sh
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=XDG_RUNTIME_DIR=/run/user/%U
+
+# No [Install] section. The timer starts this and nothing else should: it was
+# WantedBy=default.target, which invites `systemctl --user enable
+# battery-monitor.service` to run it at login, which is the thing this change
+# exists to stop. install.sh has only ever enabled the timer.

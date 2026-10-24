@@ -1,0 +1,23 @@
+accent = "#e4e4e7"
+cursor = "#ffffff"
+foreground = "#ededed"
+background = "#09090b"
+selection_foreground = "#ffffff"
+selection_background = "#27272a"
+
+color0  = "#18181b"   # dark zinc black (widget surface)
+color1  = "#ef4444"   # red (danger)
+color2  = "#22c55e"   # green (success)
+color3  = "#eab308"   # yellow (warning)
+color4  = "#71717a"   # muted zinc gray
+color5  = "#a1a1aa"   # light zinc gray
+color6  = "#d4d4d8"   # silver
+color7  = "#27272a"   # border zinc
+color8  = "#52525b"   # muted text
+color9  = "#f87171"
+color10 = "#4ade80"
+color11 = "#fde047"
+color12 = "#a1a1aa"
+color13 = "#cbd5e1"
+color14 = "#e2e8f0"
+color15 = "#ffffff"

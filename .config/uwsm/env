@@ -1,0 +1,20 @@
+# Your session environment, read once at login. hyprsimple copies this file
+# once and never touches it again, with two exceptions it manages by name:
+# XCURSOR_THEME, rewritten by theme-switcher.sh, and the NVIDIA block install.sh
+# adds on a machine whose only GPU is NVIDIA. Everything else here is yours.
+
+# Cursor (size only, theme set by install.sh based on active theme)
+export XCURSOR_SIZE=24
+export HYPRCURSOR_SIZE=24
+
+# Force all apps to use wayland
+export GDK_BACKEND="wayland,x11,*"
+export QT_QPA_PLATFORM="wayland;xcb"
+export QT_QPA_PLATFORMTHEME=hyprqt6engine
+export QT_STYLE_OVERRIDE="kvantum"
+export SDL_VIDEODRIVER="wayland,x11"
+export MOZ_ENABLE_WAYLAND=1
+export ELECTRON_OZONE_PLATFORM_HINT=wayland
+export OZONE_PLATFORM=wayland
+
+# NVIDIA env vars are auto-appended by install.sh if GPU is detected

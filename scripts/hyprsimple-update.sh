@@ -1,0 +1,508 @@
+#!/bin/bash
+
+# Update hyprsimple in place: pull the repo, refresh the helper scripts,
+# install any newly required packages, then run pending migrations.
+#
+# Which commits you get is the "channel". A fresh install follows release tags.
+# `hyprsimple-update <branch>` moves this install onto a branch and it stays
+# there, `hyprsimple-update --stable` moves it back onto releases. The channel
+# is remembered by git's own HEAD, so there is no state file to fall out of
+# sync with the checkout.
+#
+# Your ~/.config files are never overwritten here. When a default config has to
+# change, the matching migration says so and uses hyprsimple-refresh-config.sh,
+# which keeps a backup and shows you the diff.
+
+set -eEo pipefail
+
+export HYPRSIMPLE_PATH="${HYPRSIMPLE_PATH:-$HOME/.local/share/hyprsimple}"
+
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+NC='\033[0m'
+
+trap 'echo -e "\n${RED}Update failed. Fix the error above and run hyprsimple-update again.${NC}"' ERR
+
+usage() {
+  cat <<'EOF'
+Usage: hyprsimple-update [--stable | <branch>]
+
+  (no argument)  Update within the channel this install already follows:
+                 a release tag fetches the newest release, a branch pulls
+                 that branch.
+  --stable       Switch to the newest release tag, and stay on releases.
+  <branch>       Switch to that branch of origin, and stay on it.
+
+You only pass an argument when you want to change channel.
+EOF
+}
+
+CHANNEL_ARG=""
+case "${1-}" in
+  -h | --help)
+    usage
+    exit 0
+    ;;
+  --stable)
+    CHANNEL_ARG="--stable"
+    ;;
+  "") ;;
+  -*)
+    echo -e "${RED}Unknown option: $1${NC}" >&2
+    usage >&2
+    exit 1
+    ;;
+  *)
+    CHANNEL_ARG="$1"
+    ;;
+esac
+
+# Network calls that stop rather than hang.
+#
+# The three git calls below reach out to origin, and none of them was bounded.
+# A connection that stalls mid transfer leaves "Pulling latest hyprsimple..."
+# on screen with no output, no timeout and nothing to say whether it is slow or
+# wedged. Seen doing exactly that: an established connection to github with
+# nothing moving through it for two and a half minutes, while curl to the same
+# host answered in under a second, until it was interrupted by hand.
+#
+# git's own low speed guard rather than an outer timeout. It aborts a transfer
+# that drops below a byte rate for a stretch, which is the stalled case, and it
+# leaves a slow but working transfer alone. A wall clock timeout cannot tell
+# those apart and would cut off someone on a poor connection who was making
+# progress.
+#
+# Both overridable, so a machine on a genuinely slow link can raise them and
+# the suite can drop them to something it need not wait for.
+GIT_STALL_BYTES="${HYPRSIMPLE_GIT_STALL_BYTES:-1000}"
+GIT_STALL_SECONDS="${HYPRSIMPLE_GIT_STALL_SECONDS:-30}"
+
+# Tried again before giving up, because the stall that prompted this cleared on
+# its own: the run that hung was interrupted by hand and the very next one
+# finished in under a second. A failure the user fixes by pressing up and enter
+# is a failure this can absorb.
+#
+# Output is collected per attempt and only emitted once, on success. A retry
+# that appended to a partial answer would corrupt the tag list this feeds.
+GIT_ATTEMPTS="${HYPRSIMPLE_GIT_ATTEMPTS:-3}"
+
+git_net() {
+  local attempt=1 out status
+  out=$(mktemp) || return 1
+  while :; do
+    # The status is taken from git directly, not after an if.
+    #
+    # `if cmd; then ...; fi` with a false condition and no else returns 0, so
+    # reading $? on the line after the fi captured 0 and this function reported
+    # success for a fetch that had failed every attempt. The script then carried
+    # on with a repository it had not updated and printed "hyprsimple is up to
+    # date", which is worse than the hang this was written to replace.
+    git -c "http.lowSpeedLimit=$GIT_STALL_BYTES" \
+        -c "http.lowSpeedTime=$GIT_STALL_SECONDS" \
+        -C "$HYPRSIMPLE_PATH" "$@" >"$out" 2>/dev/null
+    status=$?
+
+    if (( status == 0 )); then
+      cat "$out"
+      rm -f "$out"
+      return 0
+    fi
+
+    if (( attempt >= GIT_ATTEMPTS )); then
+      rm -f "$out"
+      return "$status"
+    fi
+
+    echo -e "${YELLOW}That did not get through. Trying again ($((attempt + 1)) of $GIT_ATTEMPTS)...${NC}" >&2
+    attempt=$((attempt + 1))
+    sleep 1
+  done
+}
+
+stalled_hint() {
+  echo -e "${YELLOW}If that keeps happening, the connection to origin is stalling rather than failing.${NC}" >&2
+  echo "Check the network and run hyprsimple-update again." >&2
+}
+
+# The tag list cannot come from the local repository. The history-shrinking
+# migration deletes every tag ref, and the fetch refspec only covers branches,
+# so a shrunk install has no tags at all and never grows any on its own.
+# Sorted on a v-stripped key so a tag named 0.2.3 and one named v0.2.4 order by
+# their numbers. A plain `sort -V` puts every unprefixed tag below every
+# prefixed one, which is only accidentally right while the newest tag has a v.
+latest_release_tag() {
+  git_net ls-remote --tags origin |
+    sed 's|.*refs/tags/||; s|\^{}$||' | sort -u |
+    awk '{ key = $0; sub(/^v/, "", key); print key "\t" $0 }' |
+    sort -V | tail -1 | cut -f2
+}
+
+if [[ ! -d $HYPRSIMPLE_PATH ]]; then
+  echo -e "${RED}hyprsimple is not installed at $HYPRSIMPLE_PATH.${NC}"
+  echo "Re-run ./install.sh from a fresh clone to set it up."
+  exit 1
+fi
+
+# ---- Pull ----------------------------------------------------------------
+
+# Recorded before the pull so the end of this run can name exactly which shipped
+# configs changed, rather than comparing every file on every update.
+PREV_COMMIT=""
+[[ -d $HYPRSIMPLE_PATH/.git ]] && PREV_COMMIT=$(git -C "$HYPRSIMPLE_PATH" rev-parse HEAD 2>/dev/null)
+
+if [[ -d $HYPRSIMPLE_PATH/.git ]]; then
+  echo -e "${YELLOW}Pulling latest hyprsimple...${NC}"
+
+  if [[ -n $(git -C "$HYPRSIMPLE_PATH" status --porcelain) ]]; then
+    echo -e "${RED}$HYPRSIMPLE_PATH has local changes.${NC}"
+    echo "Commit, stash, or discard them, then run hyprsimple-update again."
+    exit 1
+  fi
+
+  # symbolic-ref fails exactly when HEAD is detached, and HEAD is detached
+  # exactly when this install is sitting on a release tag.
+  current_branch=$(git -C "$HYPRSIMPLE_PATH" symbolic-ref --quiet --short HEAD) || current_branch=""
+
+  target="$CHANNEL_ARG"
+  if [[ -z $target ]]; then
+    if [[ -n $current_branch ]]; then target="$current_branch"; else target="--stable"; fi
+  fi
+
+  if [[ $target == "--stable" ]]; then
+    tag=$(latest_release_tag) || {
+      echo -e "${RED}Could not reach origin to list releases.${NC}"
+      exit 1
+    }
+    if [[ -z $tag ]]; then
+      echo -e "${RED}origin has no release tags. Use: hyprsimple-update main${NC}"
+      exit 1
+    fi
+    if [[ -n $current_branch ]]; then
+      echo -e "${YELLOW}Leaving branch $current_branch for releases.${NC}"
+    fi
+    # --depth 1: an install that was shrunk to a shallow clone must stay one, or
+    # the 165 MB that migration reclaimed comes straight back.
+    #
+    # --force: a tag that already exists locally is never updated without it.
+    # git prints "! [rejected] (would clobber existing tag)" and still exits 0,
+    # so a re-pointed release would leave the install on the old commit while
+    # this script reported success.
+    git_net fetch --quiet --force --depth 1 origin tag "$tag" || {
+      echo -e "${RED}Could not fetch $tag from origin.${NC}"
+      stalled_hint
+      exit 1
+    }
+    git -C "$HYPRSIMPLE_PATH" checkout --quiet --detach "$tag"
+    CHANNEL_LABEL="release $tag"
+  else
+    # No --depth here, unlike the tag path. On a shallow clone --depth 1 moves
+    # the shallow boundary to the new tip, which disconnects the commit this
+    # install is on and turns the fast-forward below into "refusing to merge
+    # unrelated histories". A plain fetch keeps the boundary and stays shallow.
+    if ! git_net fetch --quiet origin "$target"; then
+      echo -e "${RED}Could not fetch '$target' from origin.${NC}"
+      echo "Either origin has no branch by that name, or the fetch did not complete." >&2
+      stalled_hint
+      exit 1
+    fi
+    if [[ $target == "$current_branch" ]]; then
+      # Staying put keeps today's guarantee that an update never discards a
+      # local commit.
+      git -C "$HYPRSIMPLE_PATH" merge --quiet --ff-only FETCH_HEAD
+    else
+      # Changing channel is an explicit instruction, so this one force-moves.
+      echo -e "${YELLOW}Switching from ${current_branch:-releases} to branch $target.${NC}"
+      git -C "$HYPRSIMPLE_PATH" checkout --quiet -B "$target" FETCH_HEAD
+    fi
+    CHANNEL_LABEL="branch $target"
+  fi
+else
+  echo -e "${YELLOW}$HYPRSIMPLE_PATH is not a git checkout, skipping pull.${NC}"
+fi
+
+echo -e "${GREEN}Now on hyprsimple $(cat "$HYPRSIMPLE_PATH/version" 2>/dev/null || echo unknown)${CHANNEL_LABEL:+ (${CHANNEL_LABEL})}${NC}"
+
+# ---- Helper scripts ------------------------------------------------------
+# These are program code, not user config, so they are replaced wholesale.
+
+echo -e "\n${YELLOW}Refreshing helper scripts in ~/.local/bin...${NC}"
+mkdir -p "$HOME/.local/bin"
+
+for script in "$HYPRSIMPLE_PATH/.local/bin"/*.sh "$HYPRSIMPLE_PATH/.local/bin"/*.fish "$HYPRSIMPLE_PATH/.local/bin/hyprsimple-plugin"; do
+  [[ -f $script ]] || continue
+  target="$HOME/.local/bin/$(basename "$script")"
+  if ! cmp -s "$script" "$target"; then
+    # Write beside the target and rename, rather than cp -f over it.
+    #
+    # One of these scripts is this one. cp -f rewrites the same inode, and bash
+    # reads a script incrementally by byte offset, so the running shell would
+    # resume at its old offset inside the new, longer file and land mid-word.
+    # That is a real failure seen in the wild: "line 61: he: command not found",
+    # after which the pull had already happened but the migrations never ran.
+    #
+    # A rename gives the new content a different inode. The running shell keeps
+    # reading the old one through the descriptor it already holds, finishes
+    # normally, and the next run picks up the new version.
+    cp -f "$script" "$target.new"
+    chmod +x "$target.new"
+    mv -f "$target.new" "$target"
+    echo -e "${GREEN}Updated:${NC} $(basename "$script")"
+  fi
+done
+
+# ---- The link install-owned defaults arrive through ----------------------
+#
+# hyprlock, hypridle and xdph read ~/.config/hypr/hyprsimple. install.sh makes
+# the link and nothing ever re-made it, so one deleted, or left pointing at an
+# old HYPRSIMPLE_PATH, stayed broken through every update.
+#
+# It stays broken quietly. hyprlang ignores a `source =` naming a file that is
+# not there, without a word: measured with hyprsunset, it exits 0 and says
+# nothing. So a missing hypr link leaves hypridle.conf with no listeners at all, which means
+# the screen stops dimming, locking and suspending on idle, and nothing
+# anywhere says why.
+#
+# Re-asserted here every run, which is what the helper scripts above already
+# get.
+ensure_link() {
+  local target="$1" link="$2" name="$3"
+
+  if [[ -L $link ]]; then
+    # Right target already, including the case where it is simply intact.
+    [[ $(readlink "$link") == "$target" ]] && return 0
+  elif [[ -e $link ]]; then
+    # A real file or directory someone put there. Replacing it would throw
+    # their work away, and `ln -sfn` onto an existing directory writes the link
+    # *inside* it, which is the accident install.sh once shipped.
+    echo -e "${YELLOW}$link is not a symlink, so hyprsimple's $name defaults are not reaching it.${NC}"
+    echo "  Move it aside and run hyprsimple-update again to restore the link."
+    return 0
+  fi
+
+  mkdir -p "$(dirname "$link")"
+  ln -sfn "$target" "$link"
+  echo -e "${GREEN}Relinked:${NC} $link"
+}
+
+ensure_link "$HYPRSIMPLE_PATH/default/hypr" "$HOME/.config/hypr/hyprsimple" hypr
+
+# ---- Packages ------------------------------------------------------------
+
+install_missing_packages() {
+  local list="$1" helper="$2"
+  [[ -f $list ]] || return 0
+
+  local missing=()
+  while read -r pkg; do
+    [[ -z $pkg || $pkg == \#* ]] && continue
+    pacman -Qi "$pkg" &>/dev/null || missing+=("$pkg")
+  done < <(grep -v '^\s*#' "$list")
+
+  (( ${#missing[@]} == 0 )) && return 0
+
+  echo -e "${YELLOW}Installing new packages: ${missing[*]}${NC}"
+  $helper -S --needed --noconfirm "${missing[@]}" || true
+}
+
+# Whichever helper is installed, not yay first. Read out of the repo just
+# pulled rather than out of ~/.local/bin, so the update that first ships this
+# file can use it on the same run that delivers it.
+AUR_DETECT="$HYPRSIMPLE_PATH/.local/bin/hyprsimple-aur-helper.sh"
+AUR_HELPER=""
+if [[ -r $AUR_DETECT ]]; then
+  # shellcheck source=/dev/null
+  source "$AUR_DETECT"
+  AUR_HELPER="$(aur_helper)" || AUR_HELPER=""
+fi
+
+echo -e "\n${YELLOW}Checking for newly required packages...${NC}"
+install_missing_packages "$HYPRSIMPLE_PATH/packages.txt" "sudo pacman"
+if [[ -n $AUR_HELPER ]]; then
+  install_missing_packages "$HYPRSIMPLE_PATH/aur-packages.txt" "$AUR_HELPER"
+else
+  # Said rather than skipped in silence. An update that reports nothing about
+  # the AUR list reads as an update that found nothing to do there.
+  echo -e "${YELLOW}No AUR helper, so AUR packages were not checked. Install paru or yay.${NC}"
+fi
+
+# ---- Migrations ----------------------------------------------------------
+
+echo -e "\n${YELLOW}Running pending migrations...${NC}"
+bash "$HOME/.local/bin/hyprsimple-migrate.sh"
+
+# ---- Themes, when a template changed --------------------------------------
+#
+# Templates are build inputs. Shipping one and never building it reaches nobody,
+# which is what happened when the power menu was themed: the stylesheet was
+# wired up correctly to colours that were never rendered, and every existing
+# install sat on the fallback until its next theme switch. It took a second
+# migration to notice.
+#
+# Rendering here removes that class of bug rather than paying for it again. A
+# template change now reaches every theme on the next update, so no future
+# template needs a migration to deliver it.
+#
+# Gated on a stamp of the template directory so this is a no-op on the ordinary
+# update where nothing changed, and rendering is deterministic from colors.toml
+# anyway, so a redundant run would only rewrite identical bytes.
+
+TEMPLATES_DIR="$HYPRSIMPLE_PATH/.config/hypr/themes/templates"
+STAMP_DIR="$HOME/.local/state/hyprsimple"
+STAMP="$STAMP_DIR/templates.stamp"
+RENDERER="$HOME/.local/bin/theme-apply-templates.sh"
+DELIVER="$HOME/.local/bin/hyprsimple-theme-deliver.sh"
+
+if [[ -d $TEMPLATES_DIR && -x $RENDERER ]]; then
+  # `|| true` on both: under set -e an assignment whose command substitution
+  # fails aborts the update, and a first run legitimately has no stamp file.
+  current=$(cat "$TEMPLATES_DIR"/*.tpl 2>/dev/null | md5sum | cut -d' ' -f1 || true)
+  previous=$(cat "$STAMP" 2>/dev/null || true)
+
+  if [[ $current != "$previous" ]]; then
+    echo -e "\n${YELLOW}Templates changed, re-rendering your themes...${NC}"
+    rendered=0
+    for dir in "$HOME/.config/hypr/themes"/*/; do
+      name=$(basename "$dir")
+      [[ $name == templates || $name == templates.user ]] && continue
+      [[ -f $dir/colors.toml ]] || continue
+      if "$RENDERER" "$dir" >/dev/null 2>&1; then rendered=$((rendered + 1)); fi
+    done
+    echo -e "${GREEN}Rendered $rendered theme(s).${NC}"
+
+    # The active theme's freshly rendered output has to reach the places a
+    # theme switch would copy it to, or the render is invisible until the user
+    # switches themes, which is the original bug wearing a different hat.
+    # readlink exits non-zero when the path is not a symlink, which is a normal
+    # state here rather than an error.
+    active=$(readlink "$HOME/.config/hypr/theme-active.lua" 2>/dev/null || true)
+    if [[ -n $active ]]; then
+      # The same delivery a theme switch performs, out of the same function.
+      #
+      # This used to be its own shorter list, and copied two of the eight
+      # generated files: a change to btop.theme.tpl or ghostty.conf.tpl was
+      # rendered here, stamped as done, and never reached btop or ghostty until
+      # the user happened to switch theme. Five of the sixteen shipped themes
+      # have no ghostty-theme file and so depend on the generated one, and
+      # every theme depends on the generated btop.theme.
+      gen="${active%/*}"
+
+      # Tested for rather than sourced blind. This script runs under set -e, so
+      # sourcing a file that is not there aborts the whole update, and the
+      # update would fail on the run that was meant to install that very file.
+      # The refresh above copies it in, so this is only reachable when the
+      # refresh was skipped or something removed it by hand.
+      if [[ -r $DELIVER ]]; then
+        # shellcheck source=/dev/null
+        source "$DELIVER"
+        deliver_theme_configs "${gen%/*}"
+
+        # Nothing is restarted. ghostty is reloaded inside the delivery
+        # itself, over its own dbus interface, and the bar, which also shows
+        # the notifications, watches its colour file.
+      else
+        # Said rather than skipped quietly. Rendered output that never reaches
+        # the program it was for is the bug this whole block exists to prevent.
+        echo -e "${YELLOW}Themes were re-rendered but not delivered: $DELIVER is missing. Switch theme once to apply them.${NC}"
+      fi
+    fi
+
+    mkdir -p "$STAMP_DIR"
+    printf '%s\n' "$current" >"$STAMP"
+  fi
+fi
+
+# ---- Configs this update changed that you still hold your own copy of ----
+#
+# Some configs cannot be delivered automatically. starship.toml and yazi.toml
+# are TOML, and that format has no include directive to hang a default off.
+#
+# hyprsimple-refresh-config.sh has always been able to update one, but nothing
+# ever said that it needed updating, so the command existed and was never run.
+# This closes that, and it is deliberately driven by what this pull actually
+# changed rather than by comparing everything: a user who edited a file on
+# purpose is not nagged on every update, only when hyprsimple touches the same
+# file. Migrations run first, so anything already handled is not mentioned.
+
+if [[ -n $PREV_COMMIT ]] && [[ $PREV_COMMIT != "$(git -C "$HYPRSIMPLE_PATH" rev-parse HEAD 2>/dev/null)" ]]; then
+  drifted=()
+  while IFS= read -r rel; do
+    [[ -n $rel ]] || continue
+    shipped="$HYPRSIMPLE_PATH/$rel"
+    user="$HOME/.config/${rel#.config/}"
+    # Absent means the user never had it, and a symlink means something else
+    # already manages it. Neither is drift.
+    [[ -f $shipped && -f $user && ! -L $user ]] || continue
+
+    # Nor is a file hyprsimple writes itself. hyprpaper.conf is rewritten on
+    # every wallpaper change and theme-hyprlock.conf on every theme switch, so
+    # each one always differs from the shipped copy, and the difference is this
+    # project's own doing rather than the user's. Reporting them was not merely
+    # noise: the command offered alongside would have replaced the active
+    # theme's wallpaper path and lock screen colours with the defaults of
+    # whichever theme happens to be shipped, until the next theme switch put
+    # them back.
+    #
+    # Recognised by the header the file carries rather than by a list kept here,
+    # so a generated file added later is skipped without this loop being
+    # touched. config-ownership-test.sh checks those headers against what the
+    # code actually does.
+    head -6 "$shipped" | grep -q "Do not edit this file" && continue
+
+    cmp -s "$shipped" "$user" || drifted+=("${rel#.config/}")
+  done < <(git -C "$HYPRSIMPLE_PATH" diff --name-only "$PREV_COMMIT" HEAD -- .config/ 2>/dev/null)
+
+  if [[ ${#drifted[@]} -gt 0 ]]; then
+    echo -e "\n${YELLOW}This update changed configs you have your own version of:${NC}"
+    for rel in "${drifted[@]}"; do
+      echo "  hyprsimple-refresh-config.sh $rel"
+    done
+    echo "Each one backs your version up and shows the diff. Nothing is deleted."
+  fi
+fi
+
+# ---- The bar, when its files changed ---------------------------------------
+#
+# Quickshell reloads a running config when one of its files changes, and a pull
+# does not change them all at once. The reload fired partway through the pull
+# that added bar/Tooltip.qml, read a Workspaces.qml that already used the type
+# and a directory that did not hold it yet, and failed:
+#
+#   Failed to load configuration
+#     caused by @bar/Workspaces.qml[106:17]: Tooltip is not a type
+#
+# Nothing triggers another reload once the pull is finished, because the file
+# that was missing is new and so was never watched. The bar stayed on the old
+# config under an error popup until it was restarted by hand.
+#
+# Restarted here, after the pull is complete, and only when this pull touched
+# the bar, so an ordinary update leaves a running bar alone.
+if [[ -n $PREV_COMMIT ]] &&
+  [[ -n $(git -C "$HYPRSIMPLE_PATH" diff --name-only "$PREV_COMMIT" HEAD -- default/quickshell 2>/dev/null) ]]; then
+  echo -e "\n${YELLOW}The bar changed, restarting it...${NC}"
+  "$HOME/.local/bin/hyprsimple-restart-bar.sh" --if-running || true
+
+  # The bar is also what shows notifications, and the restart above returns
+  # before the new bar is up. A notification sent in that gap has nowhere to
+  # go, and the first one is sent the moment this script ends: a shell that
+  # announces a long command finishing printed
+  #
+  #   Failed to show notification: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name is not activatable
+  #
+  # under "hyprsimple is up to date". So this waits, a few seconds at most, for
+  # the new bar to be there to take one. Only when a bar is running at all.
+  if pgrep -f -- "qs -p $HYPRSIMPLE_PATH/default/quickshell" >/dev/null; then
+    for _ in {1..50}; do
+      busctl --user status org.freedesktop.Notifications >/dev/null 2>&1 && break
+      sleep 0.1
+    done
+  fi
+fi
+
+# ---- Reload --------------------------------------------------------------
+
+if pgrep -x Hyprland >/dev/null; then
+  hyprctl reload >/dev/null || true
+fi
+
+echo -e "\n${GREEN}hyprsimple is up to date.${NC}"

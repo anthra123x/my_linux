@@ -1,0 +1,82 @@
+#!/bin/bash
+
+# Enable bash completion
+if [[ -f /usr/share/bash-completion/bash_completion ]]; then
+  # shellcheck disable=SC1091  # ships with bash-completion, not with this repo
+  . /usr/share/bash-completion/bash_completion
+fi
+
+# Enable zoxide
+if command -v zoxide >/dev/null 2>&1; then
+  eval "$(zoxide init --cmd cd bash)"
+fi
+
+# Enable fzf
+if command -v fzf >/dev/null 2>&1; then
+  eval "$(fzf --bash)"
+fi
+
+# enable startship
+if command -v starship >/dev/null 2>&1; then
+  eval "$(starship init bash)"
+fi
+
+# yazi configuration
+y() {
+  if command -v yazi >/dev/null 2>&1; then
+    local tmp
+    tmp="$(mktemp -t "yazi-cwd.XXXXXX")"
+    local cwd
+    yazi "$@" --cwd-file="$tmp"
+    IFS= read -r -d '' cwd <"$tmp"
+    # Clean up unconditionally, and still report a failed cd. The old form
+    # ended the chain with `|| return`, which fired on every exit that did not
+    # change directory and skipped the cleanup, leaving a yazi-cwd file behind
+    # in /tmp each time.
+    local rc=0
+    if [ -n "$cwd" ] && [ "$cwd" != "$PWD" ]; then
+      builtin cd -- "$cwd" || rc=$?
+    fi
+    rm -f -- "$tmp"
+    return "$rc"
+  fi
+}
+
+# Hitory configuration
+HISTSIZE=10000
+HISTFILESIZE=20000
+HISTCONTROL=ignoreboth
+shopt -s histappend
+shopt -s checkwinsize
+PS1='[\u@\h \W]\$ '
+
+# lsd reads ls flags, so ls stays ls with nicer output.
+#
+# grep has no alias at all. It used to be aliased to rg, which is not a drop in
+# for it and does not claim to be. Its -r is --replace, not --recursive, so
+#
+#   grep -r hello .
+#
+# searched for the regex . and replaced every character it matched, printing
+# hellohellohellohello... and exiting 0. rg also skips anything .gitignore
+# excludes and every hidden file, so a plain grep inside a repository quietly
+# missed files grep would have found. Both failures look like results.
+#
+# grep is grep and rg is rg. Both are installed, and each keeps the flags its
+# own documentation describes.
+alias ls='lsd'
+alias ffile='~/.local/bin/search.sh'
+alias fany='~/.local/bin/search_by_keyword.sh'
+
+# networking
+alias hotspot='~/.local/bin/hotspot.sh'
+alias wifi='~/.local/bin/wifi.sh'
+
+# cpu mode
+alias cpu='~/.local/bin/toggle_cpu_mode.sh'
+
+# hyprsimple management
+alias hyprsimple-update='~/.local/bin/hyprsimple-update.sh'
+alias hyprsimple-migrate='~/.local/bin/hyprsimple-migrate.sh'
+alias hyprsimple-refresh-config='~/.local/bin/hyprsimple-refresh-config.sh'
+alias hyprsimple-debug='~/.local/bin/hyprsimple-debug.sh'

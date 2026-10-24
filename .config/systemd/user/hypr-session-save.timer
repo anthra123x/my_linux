@@ -1,13 +1,12 @@
 [Unit]
-Description=Guarda la sesion de Hyprland cada 30 s
+Description=Guarda la sesion de Hyprland cada 2 min
 Documentation=man:hyprctl(1)
 
 [Timer]
-# Cada 30 s en vez de solo al cerrar sesion: si la maquina se apaga de golpe
-# o se cuelga, el ultimo estado guardado sigue siendo valido.
-OnBootSec=45s
-OnUnitActiveSec=30s
-AccuracySec=5s
+# Cada 2 min en vez de cada 30s para evitar desperdicio de CPU/I/O en bucle.
+OnBootSec=1m
+OnUnitActiveSec=2m
+AccuracySec=10s
 Unit=hypr-session-save.service
 
 [Install]

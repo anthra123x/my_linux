@@ -1,0 +1,5 @@
+-- Override the hyprsimple window rules. Anything you set here wins, because
+-- this file is loaded after the defaults in
+-- ~/.local/share/hyprsimple/default/hypr/windows.lua
+--
+-- hl.window_rule({ match = { class = "org.gnome.Calculator" }, float = true })

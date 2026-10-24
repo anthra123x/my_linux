@@ -1,0 +1,1 @@
+/home/omicron/.config/hypr/themes/monochrome/generated/hyprland-colors.lua

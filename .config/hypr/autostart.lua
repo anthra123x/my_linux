@@ -1,0 +1,7 @@
+-- Override the hyprsimple autostart commands. Anything you set here wins,
+-- because this file is loaded after the defaults in
+-- ~/.local/share/hyprsimple/default/hypr/autostart.lua
+--
+-- hl.on("hyprland.start", function()
+--   hl.exec_cmd("uwsm app -- nm-applet")
+-- end)

@@ -1,0 +1,10 @@
+-- Override the hyprsimple input settings. Anything you set here wins, because
+-- this file is loaded after the defaults in
+-- ~/.local/share/hyprsimple/default/hypr/input.lua
+--
+-- hl.config({
+--   input = {
+--     kb_layout = "us",
+--     sensitivity = 0,
+--   },
+-- })

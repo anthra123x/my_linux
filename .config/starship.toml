@@ -1,103 +1,238 @@
-# Don't print a new line at the start of the prompt
-add_newline = false
-# Pipes ╰─ ╭─
-# Powerline symbols                                     
-# Wedges 🭧🭒 🭣🭧🭓
-# Random noise 🬖🬥🬔🬗
-# Cool stuff 󰜥   
+# This file is yours. hyprsimple copies it once and never touches it again,
+# so anything you change here stays changed.
 
-# format = """
-# $directory $fill $git_branch $cmd_duration
-#  $character"""
+"$schema" = 'https://starship.rs/config-schema.json'
+
+palette = 'catppuccin_mocha'
+# [pastel, pastel_brite, catppuccin_mocha]
+
 format = """
-$cmd_duration $directory$git_branch
-  $character"""
-
-[fill]
-symbol = '-'
-style = 'fg:245'
-
-# Replace the "❯" symbol in the prompt with "➜"
-[character]                            # The name of the module we are configuring is "character"
-success_symbol = "[ ](bold fg:243)"
-error_symbol = "[ ](bold fg:244)"
-
-# Disable the package module, hiding it from the prompt completely
-[package]
-disabled = true
-
-[git_branch]
-style = "bg: 252"
-symbol = "󰘬"
-truncation_length = 12
-truncation_symbol = ""
-format = " 󰜥 [](bold fg:252)[$symbol $branch(:$remote_branch)](fg:235 bg:252)[ ](bold fg:252)"
-
-[git_commit]
-commit_hash_length = 4
-tag_symbol = " "
-
-[git_state]
-format = '[\($state( $progress_current of $progress_total)\)]($style) '
-cherry_pick = "[🍒 PICKING](bold red)"
-
-[git_status]
-conflicted = " 🏳 "
-ahead = " 🏎💨 "
-behind = " 😰 "
-diverged = " 😵 "
-untracked = " 🤷 ‍"
-stashed = " 📦 "
-modified = " 📝 "
-staged = '[++\($count\)](green)'
-renamed = " ✍️ "
-deleted = " 🗑 "
-
-[hostname]
-ssh_only = false
-format =  "[•$hostname](bg:252 bold fg:235)[](bold fg:252)"
-trim_at = ".companyname.com"
-disabled = false
-
-[line_break]
-disabled = false
-
-[memory_usage]
-disabled = true
-threshold = -1
-symbol = " "
-style = "bold dimmed green"
-
-[time]
-disabled = true
-format = '🕙[\[ $time \]]($style) '
-time_format = "%T"
+[╭](gray)\
+$os\
+$username\
+$directory\
+$git_branch\
+$git_status\
+$c\
+$cpp\
+$elixir\
+$elm\
+$golang\
+$gradle\
+$haskell\
+$java\
+$julia\
+$kotlin\
+$nodejs\
+$nim\
+$php\
+$python\
+$rust\
+$scala\
+$conda\
+$docker_context\
+$pixi\
+$time\
+$cmd_duration\
+$line_break\
+[╰](gray)\
+$character
+"""
 
 [username]
-style_user = "bold bg:252 fg:235"
-style_root = "red bold"
-format = "[](bold fg:252)[$user]($style)"
 disabled = false
 show_always = true
+# symbol = "󰀄"
+format = '[$user ]($style)'
+
+[os]
+disabled = false
+
+[os.symbols]
+Arch = " 󰣇 "
 
 [directory]
-home_symbol = " "
-read_only = "  "
-style = "bg:255 fg:240"
-truncation_length = 2
-truncation_symbol = ".../"
-format = '[](bold fg:255)[󰉋 → $path]($style)[](bold fg:255)'
+disabled = false
+# home_symbol = ""
+format = "[  $path ]($style)"
+truncation_length = 3
 
+# Shorten some long paths by text replacement
+# similar to mapped_locations in Oh My Posh:
+# [directory.substitutions]
+# "/Documents" = "/󰈙 "
+# "/Downloads" = "/ "
+# "/Music" = "/ "
+# "/Pictures" = "/ "
+# "/Videos" = "/ "
+# "/Audios" = "/ "
+# "/GitHub" = "/ "
+# "/.config" = "/ "
+# "/Develop" = "/󰲋 "
+# Keep in mind that the order matters. For example:
+# "/Important Documents" = "/󰈙 "
+# will not be replaced, because "/Documents" was already substituted before.
+# So either put "/Important Documents" before "/Documents" or use the substituted version:
+# "/Important 󰈙 " = "/󰈙 "
 
-[directory.substitutions]
-"Desktop" = "  "
-"Documents" = "  "
-"Downloads" = "  "
-"Music" = " 󰎈 "
-"Pictures" = "  "
-"Videos" = "  "
-"GitHub" = " 󰊤 "
+[time]
+disabled = false
+time_format = "%R"
+format = '[  $time ]($style)'
 
 [cmd_duration]
-min_time = 0
-format = '[](bold fg:252)[󰪢 $duration](bold bg:252 fg:235)[](bold fg:252)'
+disabled = false
+show_milliseconds = true
+min_time = 100
+format = "[  in $duration ]($style)"
+style = "fg:lavender"
+
+[character]
+disabled = false
+success_symbol = '[❯](bold fg:green)'
+error_symbol = '[❯](bold fg:red)'
+
+[git_branch]
+symbol = ""
+format = '[ $symbol $branch ]($style)'
+
+[git_status]
+disabled = true
+ahead = " $count "
+behind = " $count "
+deleted = "﫧 $count "
+diverged = " $count "
+stashed = " $count "
+modified = " $count "
+staged = " $count "
+renamed = " $count "
+untracked = " $count "
+format = '[($all_status$ahead_behind)]($style)'
+
+[lua]
+symbol = ""
+format = '[ $symbol ($version) ]($style)'
+
+[conda]
+symbol = ""
+format = '[ $symbol ($environment) ]($style)'
+ignore_base = false
+
+[docker_context]
+symbol = ""
+format = '[ $symbol ($context) ]($style)'
+
+[pixi]
+format = '[ $symbol ($version) ($environment) ]($style)'
+
+[c]
+symbol = ""
+format = '[ $symbol ($version) ]($style)'
+
+[cpp]
+symbol = ""
+format = '[ $symbol ($version) ]($style)'
+
+[elixir]
+symbol = ""
+format = '[ $symbol ($version) ]($style)'
+
+[elm]
+symbol = ""
+format = '[ $symbol ($version) ]($style)'
+
+[golang]
+symbol = ""
+format = '[ $symbol ($version) ]($style)'
+
+[gradle]
+symbol = ""
+format = '[ $symbol ($version) ]($style)'
+
+[haskell]
+symbol = ""
+format = '[ $symbol ($version) ]($style)'
+
+[java]
+symbol = ""
+format = '[ $symbol ($version) ]($style)'
+
+[julia]
+symbol = ""
+format = '[ $symbol ($version) ]($style)'
+
+[kotlin]
+symbol = ""
+format = '[ $symbol ($version) ]($style)'
+
+[nodejs]
+symbol = ""
+format = '[ $symbol ($version) ]($style)'
+
+[nim]
+symbol = "󰆥"
+format = '[ $symbol ($version) ]($style)'
+
+[php]
+symbol = ""
+format = '[ $symbol ($version) ]($style)'
+
+[python]
+symbol = ""
+format = '[ $symbol ($version) ($virtualenv) ]($style)'
+
+[rust]
+symbol = ""
+format = '[ $symbol ($version) ]($style)'
+
+[scala]
+symbol = ""
+format = '[ $symbol ($version) ]($style)'
+
+[palettes.pastel]
+bg0 = '90'
+bg1 = '168'
+bg2 = '216'
+bg3 = '110'
+bg4 = '30'
+bg5 = '24'
+text = '231'
+lavender = '147'
+red = '161'
+yellow = '222'
+green = '77'
+white = '231'
+gray = '242'
+black = '16'
+
+[palettes.pastel_brite]
+bg0 = '183'
+bg1 = '211'
+bg2 = '216'
+bg3 = '111'
+bg4 = '116'
+bg5 = '74'
+text = '16'
+lavender = '147'
+red = '161'
+yellow = '222'
+green = '77'
+white = '231'
+gray = '242'
+black = '16'
+
+[palettes.catppuccin_mocha]
+bg0 = '211'
+bg1 = '216'
+bg2 = '223'
+bg3 = '151'
+bg4 = '117'
+bg5 = '147'
+text = '16'
+lavender = '147'
+red = '161'
+yellow = '222'
+green = '77'
+white = '231'
+gray = '242'
+black = '16'
