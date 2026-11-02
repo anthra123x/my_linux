@@ -51,13 +51,15 @@ El módulo garantiza que las actualizaciones del sistema operativo (kernel, pacm
 | Fichero de Configuración | Rol Técnico | Invariante Protegido |
 | :--- | :--- | :--- |
 | `/etc/systemd/zram-generator.conf` | Límite de compresión ZRAM | `zram-size = 12288` (12 GB), algoritmo `zstd`, `swap-priority = 100`. |
-| `/etc/sysctl.d/99-local-performance.conf` | Parámetros de memoria y red | `vm.swappiness = 150`, `vm.vfs_cache_pressure = 75`, `vm.min_free_kbytes = 65536`, `net.ipv4.tcp_congestion_control = bbr`. |
+| `/etc/sysctl.d/99-local-performance.conf` | Parámetros de memoria y red | `vm.swappiness = 150`, `vm.stat_interval = 10`, `vm.compaction_proactiveness = 20`, `net.ipv4.tcp_congestion_control = bbr`. |
+| `/etc/tmpfiles.d/thp.conf` | Transparent Huge Pages | `madvise` para enabled/defrag/shmem (evita fragmentación de 2MB en 8 GB RAM). |
 | `/etc/modprobe.d/mt7921e.conf` | Estabilidad de Wi-Fi | `options mt7921e disable_aspm=1` (elimina pérdida de paquetes y latencia). |
 | `/etc/modprobe.d/bluetooth.conf` | Mandos inalámbricos | `options bluetooth disable_ertm=1` (estabilidad en sincronización). |
 | `/etc/NetworkManager/conf.d/default-wifi-powersave-off.conf` | Ahorro energético Wi-Fi | `wifi.powersave = 2` (potencia de transmisión fija sin caídas). |
 | `/etc/udev/rules.d/99-power-state.rules` | Detección AC / Batería | Ejecuta `/usr/local/bin/power-state-manager` instantáneamente ante cambios de fuente. |
 | `/etc/udev/rules.d/99-intel-gpu.rules` | Acceso a iGPU | Symlink `/dev/dri/intel-gpu`. |
 | `/usr/local/bin/power-state-manager` | Regulador térmico y energético | CPU EPP `balance_performance` en AC vs `balance_power` en Batería; suelo iGPU 600 MHz; guardia térmica a 86 °C. |
+| `~/.config/systemd/user/hypr-workspace-governor.service` | Gobernador de espacios | Regula CPU e I/O en tiempo real; aísla workspaces inactivos a `SCHED_IDLE` sin cortar audio. |
 | `/etc/sudoers.d/99-power-state-manager` | Privilegios de ejecución | `%wheel ALL=(ALL) NOPASSWD: /usr/local/bin/power-state-manager`. |
 | `~/.config/environment.d/` | Variables gráficas y memoria | iHD Media Driver, shader cache 4 GB en NVMe, redirección de caché Node. |
 | `~/.config/brave-flags.conf` | Aceleración web | Aceleración por GPU y Wayland nativo. |
@@ -95,4 +97,13 @@ El módulo garantiza que las actualizaciones del sistema operativo (kernel, pacm
   - **Convivencia limpia de capas Wayland:** `wallmotion play` detiene `hyprpaper.service` para evitar colisión en Layer 0 (background) y ahorrar recursos. Al conmutar o detener el fondo animado (`toggle-stop off` o `wallpaper-switcher.sh apply`), `hyprpaper.service` se restaura de forma transparente e instantánea.
   - **Gestión de inactividad:** Se eliminaron las banderas `--auto-pause` de `mpvpaper` (que congelaban el fotograma bajo ventanas normales de Hyprland), delegando la suspensión por reposo a las reglas de `hypridle` (`~/.local/bin/wallmotion pause/resume`).
 - **Atajo asignado:** `SUPER + SHIFT + T` (reemplaza el anterior conmutador de temas).
+
+---
+
+## 6. Gobernador de Espacios de Trabajo (`hypr-workspace-governor`)
+- **`hypr-workspace-governor.py`**: Daemon ultraligero que conecta al socket IPC `.socket2.sock` de Hyprland para gobernar los recursos del sistema en base al espacio de trabajo visible.
+- **Aislamiento en reposo:** Cuando un espacio de trabajo pasa a segundo plano, todos sus procesos e hilos internos se trasladan a la política del kernel `SCHED_IDLE`, prioridad de proceso `nice 19` y clase de E/S `IOPRIO_CLASS_IDLE`. La ventana en foco obtiene el 100% del tiempo de CPU e I/O sin contención.
+- **Protección de audio en segundo plano:** Consulta periódicamente `pactl` para no reducir a `SCHED_IDLE` aplicaciones que estén reproduciendo sonido activamente (música o llamadas), evitando chasquidos o cortes.
+- **`apply-kernel-optimizations.sh`**: Script administrativo para desplegar Transparent Huge Pages en `madvise`, `vm.stat_interval=10` y perfil térmico en un solo paso.
+
 

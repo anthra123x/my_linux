@@ -87,6 +87,14 @@ El entorno soporta dos subsistemas complementarios de fondos con cambio en calie
    - Triple buffering dinamico habilitado (`render:new_render_scheduling = true`).
 3. **Gestion Termica y de Corriente:**
    - Script `power-state-manager` para coordinar perfiles ACPI (`performance` / `balanced`), suelo minimo de GPU a 800 MHz con cargador para evitar latencias de cambio de reloj, y control de ventilador ASUS.
+4. **Gobernador de Recursos de Espacios de Trabajo (`hypr-workspace-governor`):**
+   - Servicio en segundo plano acoplado al socket IPC `.socket2.sock` de Hyprland.
+   - Conmuta automáticamente los procesos de espacios inactivos a la política `SCHED_IDLE`, prioridad de proceso `nice 19` y clase de E/S ociosa (`ionice idle`), asegurando que solo el espacio de trabajo en foco consuma CPU y ancho de banda del bus.
+   - Protección de audio integrada: detecta flujos de sonido activos vía PipeWire / PulseAudio (`pactl`) para no limitar reproductores como Spotify o videollamadas.
+5. **Optimizaciones de Kernel y Memoria (Intel Alder Lake-N):**
+   - Transparent Huge Pages (THP) en `madvise` para evitar la fragmentación de páginas de 2 MB en 8 GB de RAM física.
+   - `vm.stat_interval = 10` para reducir en un 90% los despertares de temporizador de los núcleos Gracemont, facilitando estados C8/C10 de ultra-bajo consumo.
+
 
 ---
 
