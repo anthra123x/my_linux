@@ -101,6 +101,8 @@ sync_folder "$HOME/.config/gtk-4.0" "$REPO_DIR/.config/gtk-4.0"
 sync_folder "$HOME/.config/xsettingsd" "$REPO_DIR/.config/xsettingsd"
 sync_folder "$HOME/.config/fontconfig" "$REPO_DIR/.config/fontconfig"
 sync_folder "$HOME/.config/mpv" "$REPO_DIR/.config/mpv"
+sync_folder "$HOME/.config/mpvpaper" "$REPO_DIR/.config/mpvpaper"
+sync_folder "$HOME/.config/wallmotion" "$REPO_DIR/.config/wallmotion" --exclude="*.log" --exclude="*.sock" --exclude=".descarga" --exclude="stock_backup"
 sync_folder "$HOME/.config/micro" "$REPO_DIR/.config/micro" --exclude="syntax"
 sync_folder "$HOME/.config/systemd/user" "$REPO_DIR/.config/systemd/user" --exclude="plasma-*.service" --exclude="*.wants"
 
@@ -119,7 +121,7 @@ for f in .bashrc .bash_profile .bash_logout .zshrc .zshenv .gitconfig .vimrc; do
 done
 
 # 3. Scripts del sistema
-for s in hypr-session-save hypr-session-restore lidwatch stale-process-reaper tmpfs-gc fix-laptop-audio.sh fix-oom-and-restore.sh fix-greeter-wallpaper.sh greeter-migrate-tuigreet.sh opencode-browser-gc; do
+for s in hypr-session-save hypr-session-restore lidwatch stale-process-reaper tmpfs-gc fix-laptop-audio.sh fix-oom-and-restore.sh fix-greeter-wallpaper.sh greeter-migrate-tuigreet.sh opencode-browser-gc animated-wallpaper-picker.sh animated-wallpaper-switcher.sh wallmotion battery-monitor.sh wallpaper-switcher.sh system-upgrade.sh optimize-boot.sh fix-wireless-and-gamepad.sh check-gamepad.sh pair-gamepad.py hyprsimple-restart-bar.sh; do
     if [ -f "$HOME/.local/bin/$s" ]; then
         sync_file "$HOME/.local/bin/$s" "$REPO_DIR/scripts/$s"
         chmod +x "$REPO_DIR/scripts/$s"

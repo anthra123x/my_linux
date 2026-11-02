@@ -10,7 +10,7 @@
 local vars = require("default.hypr.vars")
 local home = os.getenv("HOME")
 
-hl.bind("SUPER + SHIFT + T", hl.dsp.exec_cmd(home .. "/.local/bin/theme-switcher.sh"),                 { description = "Theme Switcher" })
+hl.bind("SUPER + SHIFT + T", hl.dsp.exec_cmd(home .. "/.local/bin/animated-wallpaper-switcher.sh pick"), { description = "Animated Wallpaper Picker" })
 hl.bind("SUPER + SHIFT + W", hl.dsp.exec_cmd(home .. "/.local/bin/wallpaper-switcher.sh pick"),        { description = "Wallpaper Picker" })
 
 hl.bind("SUPER + T", hl.dsp.exec_cmd(vars.terminal),    { description = "Terminal" })

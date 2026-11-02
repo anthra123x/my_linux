@@ -18,3 +18,5 @@ export ELECTRON_OZONE_PLATFORM_HINT=wayland
 export OZONE_PLATFORM=wayland
 
 # NVIDIA env vars are auto-appended by install.sh if GPU is detected
+
+export TERMINAL=kitty

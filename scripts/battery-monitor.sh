@@ -44,16 +44,74 @@ get_battery_state() {
 BATTERY_LEVEL=$(get_battery_percentage)
 BATTERY_STATE=$(get_battery_state)
 
-if [[ "$BATTERY_STATE" == "discharging" ]]; then
-  # The lowest threshold the battery has fallen past, not every threshold it is
-  # under. Acting inside the loop meant one 9% reading dimmed the screen three
-  # times and sent three identical notifications, because the flag file only
-  # ever holds the last threshold written, so the next iteration compared
-  # against a different number and fired again. At 2% it was five.
-  #
-  # Comparing rather than taking the last match, which would be shorter and
-  # would rely on BATTERY_THRESHOLD staying in descending order. Nothing states
-  # that invariant and nothing enforces it.
+LAST_AC_STATE_FILE="${XDG_RUNTIME_DIR:-/tmp}/last-ac-state"
+
+is_ac_connected() {
+  for f in /sys/class/power_supply/*/online; do
+    if [[ -f "$f" && $(cat "$f" 2>/dev/null) == "1" ]]; then
+      echo 1
+      return
+    fi
+  done
+  if [[ "$BATTERY_STATE" =~ ^(charging|fully-charged)$ ]]; then
+    echo 1
+    return
+  fi
+  echo 0
+}
+
+AC_CONNECTED=$(is_ac_connected)
+LAST_AC=$(cat "$LAST_AC_STATE_FILE" 2>/dev/null || echo "")
+
+if [[ "$AC_CONNECTED" == "1" ]]; then
+  # ============================================================================
+  # Cargador Conectado (AC) -> MODO GAMER / MAXIMO RENDIMIENTO
+  # ============================================================================
+  rm -f "$FLAG_FILE"
+
+  if [[ "$LAST_AC" != "1" ]]; then
+    if command -v powerprofilesctl >/dev/null 2>&1; then
+      cur_profile=$(powerprofilesctl get 2>/dev/null)
+      if [[ "$cur_profile" != "performance" ]]; then
+        powerprofilesctl set performance
+      fi
+    fi
+
+    # Invocar power-state-manager si está disponible con permisos sudoers
+    sudo -n /usr/local/bin/power-state-manager ac 2>/dev/null || true
+
+    # Restaurar brillo si habia sido atenuado por bateria baja previa
+    if [[ -f $BRIGHTNESS_FILE ]]; then
+      saved=$(cat "$BRIGHTNESS_FILE" 2>/dev/null)
+      now=$(brightnessctl -m 2>/dev/null | cut -d, -f4 | tr -d '%')
+      if [[ $saved =~ ^[0-9]+$ && $now =~ ^[0-9]+$ ]] && ((now < saved)); then
+        brightnessctl set "${saved}%"
+      fi
+      rm -f "$BRIGHTNESS_FILE"
+    fi
+    rm -f "$PROFILE_FILE"
+
+    notify-send -a "Energía" -i "battery-charging" "⚡ Modo Rendimiento Gamer" "Cargador conectado: Turbo hasta 3.8 GHz, GPU optimizada a 1250 MHz y disipación activa." -u normal -t 3500
+    echo "1" > "$LAST_AC_STATE_FILE"
+  fi
+
+else
+  # ============================================================================
+  # Funcionando con Bateria
+  # ============================================================================
+  if [[ "$LAST_AC" == "1" ]]; then
+    # Desconexion del cargador -> Retornar a modo equilibrado y eficiente
+    if command -v powerprofilesctl >/dev/null 2>&1; then
+      powerprofilesctl set balanced
+    fi
+    sudo -n /usr/local/bin/power-state-manager battery 2>/dev/null || true
+    notify-send -a "Energía" -i "battery" "🔋 Modo Batería Eficiente" "Cargador desconectado: Perfil balanceado para optimizar autonomía y temperatura." -u normal -t 3500
+    echo "0" > "$LAST_AC_STATE_FILE"
+  elif [[ -z "$LAST_AC" ]]; then
+    echo "0" > "$LAST_AC_STATE_FILE"
+  fi
+
+  # Gestion de umbrales criticos de bateria
   crossed=""
   for threshold in "${BATTERY_THRESHOLD[@]}"; do
     if [[ "$BATTERY_LEVEL" -le "$threshold" ]] &&
@@ -63,44 +121,9 @@ if [[ "$BATTERY_STATE" == "discharging" ]]; then
   done
 
   if [[ -n $crossed ]]; then
-    # Once per crossing, for the dimming as well as the message. Falling into a
-    # lower band writes a new value here and so acts again, which is the
-    # escalation this file was always for.
-    #
-    # The dimming used to sit outside this check and so ran on every tick. The
-    # timer fires every 30 seconds, so from the moment the battery passed 20%
-    # the screen was forced back to 5% twice a minute and could not be turned
-    # up: raise it to read something, and half a minute later it was dark
-    # again. Dimming hard and early is deliberate. Pinning it there, against
-    # the user, was not.
     if [[ ! -f "$FLAG_FILE" ]] || [[ $(cat "$FLAG_FILE" 2>/dev/null) != "$crossed" ]]; then
-      # Remembered before dimming, so plugging in can put it back. Only on the
-      # first crossing: falling into a lower band dims again from 5%, and
-      # recording that would make 5% the value restored later.
-      #
-      # A record that is not a number counts as no record. It lives in /tmp,
-      # which anything can leave a file in, and an empty one left behind would
-      # otherwise stop the real brightness ever being written and so lose the
-      # restore silently.
       recorded=$(cat "$BRIGHTNESS_FILE" 2>/dev/null)
       now=$(brightnessctl -m 2>/dev/null | cut -d, -f4 | tr -d '%')
-
-      # A screen already at the dim level has no before value to read.
-      #
-      # hypridle dims to the same 5 after ten minutes idle, through
-      # brightnessctl -s and -r, and it gets there first: its timeout is ten
-      # minutes and the battery falls past a threshold whenever it does. A
-      # crossing during that idle used to record 5 as the brightness to go back
-      # to, and the guard on the restore rejects 5, so the screen stayed at 5
-      # when the charger went in. Traced end to end:
-      #
-      #   80, idle dims to 5, crossing records 5, user returns and hypridle
-      #   restores 80, next crossing dims to 5 again, charging restores nothing.
-      #
-      # Neither recording nor dimming here. The screen is where it needs to be
-      # already, and the value that would be recorded is another program's, not
-      # the user's. The next crossing after hypridle restores reads the real
-      # one.
       if [[ $now != "$LOW_BATTERY_BRIGHTNESS" ]]; then
         if [[ ! $recorded =~ ^[0-9]+$ ]]; then
           printf '%s\n' "$now" >"$BRIGHTNESS_FILE"
@@ -108,89 +131,11 @@ if [[ "$BATTERY_STATE" == "discharging" ]]; then
         brightnessctl set "${LOW_BATTERY_BRIGHTNESS}"%
       fi
 
-      # The same shape for the power profile: remember the one in use, once,
-      # then switch. A machine already in power-saver has nothing to remember
-      # and is not sent back anywhere later. One without power-profiles-daemon
-      # is only dimmed.
-      saver=""
       if command -v powerprofilesctl >/dev/null 2>&1; then
-        profile=$(powerprofilesctl get 2>/dev/null)
-        if [[ -n $profile && $profile != "$LOW_BATTERY_PROFILE" ]]; then
-          if [[ ! $(cat "$PROFILE_FILE" 2>/dev/null) =~ ^(balanced|performance)$ ]]; then
-            mkdir -p "$(dirname "$PROFILE_FILE")"
-            printf '%s\n' "$profile" >"$PROFILE_FILE"
-          fi
-          powerprofilesctl set "$LOW_BATTERY_PROFILE"
-        fi
-        # Said only if it is so. The switch can be refused.
-        [[ $(powerprofilesctl get 2>/dev/null) == "$LOW_BATTERY_PROFILE" ]] && saver=", power saver on"
+        powerprofilesctl set "$LOW_BATTERY_PROFILE"
       fi
-      notify-send -u critical "Battery Low" "Battery at ${BATTERY_LEVEL}%, brightness reduced to ${LOW_BATTERY_BRIGHTNESS}%${saver}"
+      notify-send -u critical "Batería Baja" "Batería al ${BATTERY_LEVEL}%, brillo reducido y ahorro de energía activado."
       echo "$crossed" >"$FLAG_FILE"
-    fi
-  fi
-else
-  # Whether a low battery was acted on since the charger was last in. Read
-  # before anything is cleared, because it decides whether to say anything.
-  warned=false
-  [[ -f $FLAG_FILE || -f $BRIGHTNESS_FILE || -f $PROFILE_FILE ]] && warned=true
-  restored=()
-
-  # Clear flag when charging/charged to allow new notifications on next discharge
-  rm -f "$FLAG_FILE"
-
-  # The power profile goes back, if it is still the one a low battery chose.
-  # Anything else was picked since, in the system panel or a terminal, and is
-  # not ours to undo.
-  if [[ -f $PROFILE_FILE ]]; then
-    saved=$(cat "$PROFILE_FILE" 2>/dev/null)
-    if [[ $saved =~ ^(balanced|performance)$ ]] && command -v powerprofilesctl >/dev/null 2>&1 &&
-      [[ $(powerprofilesctl get 2>/dev/null) == "$LOW_BATTERY_PROFILE" ]] &&
-      powerprofilesctl set "$saved"; then
-      restored+=("${saved} mode")
-    fi
-    rm -f "$PROFILE_FILE"
-  fi
-
-  # And the brightness.
-  #
-  # The dimming had no counterpart, so a low battery took the screen to 5% and
-  # left it there. Plugging in cleared the flag and nothing else: the screen
-  # stayed dark until it was raised by hand, every time, long after the
-  # notification that explained it had gone. Measured on a live machine
-  # charging at 4%, with the panel sitting at 5% and no way to tell why.
-  #
-  # Its own record rather than `brightnessctl -s` and `-r`. hypridle already
-  # uses that save slot for the idle dim, so the two would overwrite each
-  # other: idle after a battery dim would save 5% over the real value, and the
-  # restore here would put back 5%.
-  if [[ -f $BRIGHTNESS_FILE ]]; then
-    saved=$(cat "$BRIGHTNESS_FILE" 2>/dev/null)
-    now=$(brightnessctl -m 2>/dev/null | cut -d, -f4 | tr -d '%')
-    # Whenever the screen is darker than it was before the dimming.
-    #
-    # This used to restore only a screen still at exactly the dim level, on
-    # the reasoning that any other value was chosen deliberately. But 5% is
-    # too dark to work at, so the usual thing is to nudge it up to read, and
-    # that nudge then cancelled the restore: the charger went in, the screen
-    # stayed dim and nothing was said. A screen set brighter than before is
-    # still left alone.
-    if [[ $saved =~ ^[0-9]+$ && $now =~ ^[0-9]+$ ]] && ((now < saved)); then
-      brightnessctl set "${saved}%"
-      restored+=("brightness ${saved}%")
-    fi
-    rm -f "$BRIGHTNESS_FILE"
-  fi
-
-  # Said once, after a low battery, whether or not there was anything left to
-  # put back. Plugging in at a healthy level says nothing: the bar shows that.
-  if [[ $warned == true ]]; then
-    if ((${#restored[@]} == 2)); then
-      notify-send "Charging" "Battery at ${BATTERY_LEVEL}%, ${restored[0]} and ${restored[1]} restored"
-    elif ((${#restored[@]} == 1)); then
-      notify-send "Charging" "Battery at ${BATTERY_LEVEL}%, ${restored[0]} restored"
-    else
-      notify-send "Charging" "Battery at ${BATTERY_LEVEL}%"
     fi
   fi
 fi

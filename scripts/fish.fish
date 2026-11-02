@@ -40,6 +40,7 @@ end
 # grep is grep and rg is rg. Both are installed, and each keeps the flags its
 # own documentation describes.
 alias ls='lsd'
+alias neofetch='fastfetch'
 alias ffile='~/.local/bin/search.sh'
 alias fany='~/.local/bin/search_by_keyword.sh'
 

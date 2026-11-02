@@ -172,6 +172,10 @@ echo "$SELECTED" > "$CACHE_DIR/current_wallpaper_path"
 
 # Disable live wallpaper mode (manual pick overrides cycling)
 rm -f "$CACHE_DIR/live_wallpaper_enabled"
+if pgrep -x mpvpaper >/dev/null 2>&1; then
+  "$HOME/.local/bin/wallmotion" stop >/dev/null 2>&1 || true
+fi
+systemctl --user start hyprpaper.service >/dev/null 2>&1 || true
 write_hyprpaper_conf "$HOME/.cache/current_wallpaper"
 
 show_wallpaper "$SELECTED"

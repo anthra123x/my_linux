@@ -21,3 +21,6 @@ __pycache__/
 .env
 *.pem
 *.key
+*.token
+.config/environment.d/*gemini*.conf
+.config/environment.d/*secret*.conf

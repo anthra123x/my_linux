@@ -15,12 +15,13 @@ if status is-interactive
         enable_transience
     end
     
-    # Colors
-    if test -f ~/.local/state/quickshell/user/generated/terminal/sequences.txt
+    # Colors (solo para emuladores distintos a kitty para preservar el tema Late Night exacto de Kitty)
+    if test "$TERM" != "xterm-kitty" -a -f ~/.local/state/quickshell/user/generated/terminal/sequences.txt
         cat ~/.local/state/quickshell/user/generated/terminal/sequences.txt
     end
 
     # Aliases
+    alias neofetch 'fastfetch'
     # kitty doesn't clear properly so we need to do this weird printing
     alias clear "printf '\033[2J\033[3J\033[1;1H'"
     alias celar "printf '\033[2J\033[3J\033[1;1H'"

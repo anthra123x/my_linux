@@ -4,9 +4,14 @@
 -- See https://wiki.hypr.land/Configuring/Basics/Monitors/
 -- List current monitors and resolutions: hyprctl monitors all
 
--- Primary monitor (laptop screen 1920x1080)
+-- Monitor principal (pantalla integrada fijada a 1920x1080@60Hz)
 hl.env("GDK_SCALE", "1")
+hl.monitor({ output = "eDP-1", mode = "1920x1080@60", position = "0x0", scale = 1, vrr = 0 })
+
+-- Monitor externo (HDMI-A-1 como extension a 1920x1080@100Hz)
+hl.monitor({ output = "HDMI-A-1", mode = "1920x1080@100", position = "auto", scale = 1 })
 hl.monitor({ output = "", mode = "preferred", position = "auto", scale = 1 })
+
 
 -- Optimized for retina-class 2x displays (13" 2.8K, 27" 5K, 32" 6K):
 -- hl.env("GDK_SCALE", "2")

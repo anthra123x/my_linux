@@ -3,7 +3,7 @@
 -- ~/.local/share/hyprsimple/default/hypr/vars.lua
 
 return {
-  terminal = "ghostty",
+  terminal = "kitty",
   browser = "brave",
   fileManager = "dolphin",
 }

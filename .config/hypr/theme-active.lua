@@ -1,1 +1,1 @@
-/home/omicron/.config/hypr/themes/monochrome/generated/hyprland-colors.lua
+/home/omicron/.config/hypr/themes/doom-one/generated/hyprland-colors.lua

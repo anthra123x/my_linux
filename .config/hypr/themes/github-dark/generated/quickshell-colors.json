@@ -1,0 +1,14 @@
+{
+  "background": "#0d1117",
+  "surface": "#484f58",
+  "foreground": "#e6edf3",
+  "accent": "#58a6ff",
+  "accent_dim": "#58a6ff",
+  "secondary": "#bc8cff",
+  "success": "#3fb950",
+  "warning": "#d29922",
+  "danger": "#ff7b72",
+  "info": "#39c5cf",
+  "muted": "#6e7681",
+  "border": "#b1bac4"
+}

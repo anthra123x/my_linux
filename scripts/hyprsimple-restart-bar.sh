@@ -54,4 +54,4 @@ if bar_running; then
   bar_running && pkill -f -- "qs -p $BAR"
 fi
 
-setsid uwsm app -- qs -p "$BAR" >/dev/null 2>&1 &
+setsid env QML_IMPORT_PATH="$QML_IMPORT_PATH" uwsm app -- qs -p "$BAR" >/dev/null 2>&1 &

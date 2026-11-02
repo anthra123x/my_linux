@@ -28,4 +28,4 @@ keybind = ctrl+shift+alt+l=resize_split:right,20
 keybind = ctrl+shift+t=new_tab
 keybind = ctrl+shift+n=next_tab
 keybind = ctrl+shift+p=previous_tab
-theme = Carbonfox
+theme = Doom One

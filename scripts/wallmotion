@@ -1,0 +1,1513 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+wallmotion - Fondos animados para Hyprland (vídeo, coste ~0% CPU vía VAAPI)
+
+Motor de reproducción : mpvpaper + mpv (decodificación por hardware)
+Galería               : interfaz web local (127.0.0.1), sin dependencias
+Dependencias          : python3 (stdlib), ffmpeg, ffprobe, mpvpaper
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import mimetypes
+import os
+import re
+import shutil
+import signal
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import unquote
+from pathlib import Path
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Rutas y constantes
+# ─────────────────────────────────────────────────────────────────────────────
+
+APP = "wallmotion"
+CFG = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / APP
+LIB = CFG / "library"
+THUMBS = CFG / "thumbs"
+STATE = CFG / "state.json"
+LOG = CFG / "wallmotion.log"
+HYPR_CONF = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "hypr"
+
+RUN = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / APP
+PIDFILE = RUN / "pids.json"
+
+VIDEO_EXT = {".mp4", ".webm", ".mkv", ".mov", ".m4v", ".avi", ".mkv", ".gif", ".mpg", ".mpeg", ".ogv"}
+
+# mpv ultra-optimizado: fluidez nativa a 60 FPS, decodificación VAAPI por hardware y coste ~0% CPU.
+# - hwdec=vaapi,auto-safe + hwdec-codecs=all: aceleración hardware completa en GPU Intel VDBOX.
+# - profile=fast: desactiva postprocesados costosos y shaders de múltiples pasadas.
+# - scale=bilinear, cscale=bilinear, dscale=bilinear: filtrado por hardware en 1 ciclo de textura sin shaders pesados.
+#   (En pantallas 1080p con vídeos 4K, el downscaling 2:1 entero equivale a SSAA 2x2 nativo y nítido).
+# - video-sync=desync + framedrop=vo: cadencia fluida sincronizada al compositor sin judder ni cortes.
+# - demuxer-max-bytes=16MiB + demuxer-max-back-bytes=0 + cache=no: consumo de RAM acotado estrictamente.
+MPV_OPTS = (
+    "no-audio --no-osc --no-input-default-bindings --no-terminal "
+    "--keep-open=no --loop-playlist=inf --hwdec=vaapi,auto-safe "
+    "--hwdec-codecs=all --profile=fast "
+    "--scale=bilinear --cscale=bilinear --dscale=bilinear "
+    "--video-sync=desync --framedrop=vo --vd-lavc-fast --vd-lavc-threads=2 "
+    "--demuxer-max-bytes=16MiB --demuxer-max-back-bytes=0 --cache=no"
+)
+
+TAGS_RE = re.compile(r"[^a-z0-9]+")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Utilidades
+# ─────────────────────────────────────────────────────────────────────────────
+
+def log(msg: str) -> None:
+    CFG.mkdir(parents=True, exist_ok=True)
+    line = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}"
+    try:
+        with LOG.open("a", encoding="utf-8") as fh:
+            fh.write(line + "\n")
+    except OSError:
+        pass
+    if os.environ.get("WALLMOTION_DEBUG"):
+        print(line, file=sys.stderr)
+
+
+def die(msg: str, code: int = 1) -> "None":
+    print(f"wallmotion: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def have(binary: str) -> bool:
+    return shutil.which(binary) is not None
+
+
+def read_json(path: Path, default):
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return default
+
+
+def write_json(path: Path, data) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(path)
+
+
+def slugify(text: str, limit: int = 42) -> str:
+    out = TAGS_RE.sub("-", text.lower()).strip("-")
+    return (out or "fondo")[:limit]
+
+
+def fmt_size(num: int) -> str:
+    for unit in ("B", "KB", "MB", "GB"):
+        if num < 1024 or unit == "GB":
+            return f"{num:.0f} {unit}" if unit == "B" else f"{num:.1f} {unit}"
+        num /= 1024.0
+    return f"{num:.1f} GB"
+
+
+def fmt_duration(seconds: float) -> str:
+    seconds = int(seconds or 0)
+    return f"{seconds // 60}:{seconds % 60:02d}"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Hyprland
+# ─────────────────────────────────────────────────────────────────────────────
+
+def outputs() -> list[str]:
+    """Salidas físicas activas de Hyprland."""
+    if not have("hyprctl"):
+        return []
+    try:
+        out = subprocess.run(
+            ["hyprctl", "monitors", "-j"], capture_output=True, text=True, timeout=5
+        ).stdout
+        data = json.loads(out)
+        return [m["name"] for m in data if not m.get("disabled")]
+    except (subprocess.SubprocessError, ValueError, KeyError):
+        return []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Biblioteca
+# ─────────────────────────────────────────────────────────────────────────────
+
+def probe(path: Path) -> dict:
+    """Metadatos del vídeo con ffprobe."""
+    meta = {
+        "duration": 0.0, "width": 0, "height": 0, "fps": 0.0,
+        "vcodec": "", "size": path.stat().st_size, "acodec": "",
+    }
+    if not have("ffprobe"):
+        return meta
+    try:
+        raw = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-print_format", "json",
+             "-show_format", "-show_streams", str(path)],
+            capture_output=True, text=True, timeout=30,
+        ).stdout
+        data = json.loads(raw or "{}")
+    except (subprocess.SubprocessError, ValueError):
+        return meta
+
+    fmt = data.get("format", {})
+    meta["size"] = int(fmt.get("size") or meta["size"])
+
+    for st in data.get("streams", []):
+        if st.get("codec_type") == "video" and not meta["vcodec"]:
+            meta["width"] = int(st.get("width") or 0)
+            meta["height"] = int(st.get("height") or 0)
+            meta["vcodec"] = st.get("codec_name", "")
+            rate = st.get("avg_frame_rate") or st.get("r_frame_rate") or "0/1"
+            try:
+                num, den = rate.split("/")
+                meta["fps"] = round(float(num) / float(den), 2) if float(den) else 0.0
+            except (ValueError, ZeroDivisionError):
+                pass
+            if str(st.get("disposition", {}).get("attached_pic", 0)) == "1":
+                meta["vcodec"] = ""  # carátula embebida, no vídeo real
+        elif st.get("codec_type") == "audio" and not meta["acodec"]:
+            meta["acodec"] = st.get("codec_name", "")
+    try:
+        meta["duration"] = round(float(fmt.get("duration") or 0.0), 2)
+    except (TypeError, ValueError):
+        pass
+    return meta
+
+
+def make_thumb(src: Path, dest: Path, at_ratio: float = 0.35) -> bool:
+    """Extrae un fotograma representativo. Sondeo ligero: evita claves blacks."""
+    if not have("ffmpeg"):
+        return False
+    meta = probe(src)
+    dur = meta["duration"]
+    candidates = [dur * at_ratio, 0.0, dur * 0.6]
+    for pos in candidates:
+        cmd = ["ffmpeg", "-v", "quiet", "-nostdin", "-y"]
+        if pos > 0.1:
+            cmd += ["-ss", f"{max(pos - 1.0, 0):.2f}"]
+        cmd += ["-i", str(src), "-frames:v", "1",
+                "-vf", "scale=480:-2:flags=bilinear", "-q:v", "5", str(dest)]
+        try:
+            subprocess.run(cmd, capture_output=True, timeout=60, check=False)
+        except subprocess.SubprocessError:
+            return False
+        if dest.exists() and dest.stat().st_size > 1200:
+            return True
+        dest.unlink(missing_ok=True)
+    return False
+
+
+def library() -> list[dict]:
+    items = read_json(CFG / "library.json", [])
+    return items if isinstance(items, list) else []
+
+
+def save_library(items: list[dict]) -> None:
+    items.sort(key=lambda i: i.get("added", 0), reverse=True)
+    write_json(CFG / "library.json", items)
+
+
+def find_item(ref: str) -> dict | None:
+    """Busca por id, slug exacto, título o ruta."""
+    items = library()
+    if not items:
+        return None
+    if ref.isdigit() and 0 <= int(ref) < len(items):
+        return items[int(ref)]
+    low = ref.lower()
+    for item in items:
+        if item["id"] == low:
+            return item
+    for item in items:
+        if item.get("slug") == low or Path(item["path"]).name.lower() == low:
+            return item
+    hits = [i for i in items if low in i.get("title", "").lower()]
+    return hits[0] if hits else None
+
+
+def import_file(src: Path, title: str | None = None, tags: str = "",
+                extra: dict | None = None) -> tuple[dict | None, bool]:
+    """Copia un vídeo a la biblioteca. Devuelve (elemento, es_nuevo)."""
+    src = src.expanduser().resolve()
+    if not src.exists() or not src.is_file():
+        return None, False
+    if src.suffix.lower() not in VIDEO_EXT:
+        return None, False
+
+    CFG.mkdir(parents=True, exist_ok=True)
+    LIB.mkdir(parents=True, exist_ok=True)
+    THUMBS.mkdir(parents=True, exist_ok=True)
+
+    stem = slugify(title) if title else slugify(src.stem)
+    dest = LIB / f"{stem}{src.suffix.lower()}"
+
+    if dest.exists():
+        # Importación idempotente: si ese destino ya está en la biblioteca,
+        # se reutiliza en lugar de crear una copia "-2" idéntica.
+        for known in library():
+            if known.get("path") == str(dest):
+                return known, False
+        n = 2
+        while (LIB / f"{stem}-{n}{src.suffix.lower()}").exists():
+            n += 1
+        dest = LIB / f"{stem}-{n}{src.suffix.lower()}"
+        title = f"{title or src.stem} ({n})"
+
+    try:
+        if src != dest:
+            shutil.copy2(src, dest)
+    except OSError as exc:
+        log(f"copia fallida {src}: {exc}")
+        return None
+
+    meta = probe(dest)
+    thumb = THUMBS / f"{dest.stem}.jpg"
+    has_thumb = make_thumb(dest, thumb)
+
+    item = {
+        "id": dest.stem,
+        "slug": dest.stem,
+        "title": title or src.stem.replace("_", " ").replace("-", " ").strip(),
+        "path": str(dest),
+        "thumb": str(thumb) if has_thumb else "",
+        "tags": sorted({t for t in TAGS_RE.split(tags.lower()) if t}),
+        "added": time.time(),
+        **{k: meta[k] for k in ("duration", "width", "height", "fps", "vcodec", "size", "acodec")},
+        **(extra or {}),
+    }
+
+    items = library()
+    items = [i for i in items if i.get("path") != item["path"]]
+    items.append(item)
+    save_library(items)
+    log(f"importado {item['title']} ({item['width']}x{item['height']})")
+    return item, True
+
+
+def import_url(url: str, title: str | None = None, tags: str = "",
+               extra: dict | None = None, retries: int = 3) -> tuple[dict | None, bool]:
+    """Descarga una URL a la biblioteca. Devuelve (elemento, es_nuevo).
+
+    Reintenta con espera creciente ante 429/5xx: servidores como Wikimedia
+    limitan las descargas automatizadas y cortan la conexión si no se espacia.
+    """
+    CFG.mkdir(parents=True, exist_ok=True)
+    tmp = CFG / ".descarga"
+    tmp.mkdir(exist_ok=True)
+    dest = tmp / (url.rsplit("/", 1)[-1].split("?")[0] or "descarga.mp4")
+    if not dest.suffix:
+        dest = dest.with_suffix(".mp4")
+
+    for attempt in range(1, retries + 1):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": UA})
+            with urllib.request.urlopen(req, timeout=180) as resp, dest.open("wb") as fh:
+                shutil.copyfileobj(resp, fh, length=1 << 18)
+            result = import_file(dest, title, tags, extra)
+            dest.unlink(missing_ok=True)
+            return result
+        except urllib.error.HTTPError as exc:
+            dest.unlink(missing_ok=True)
+            retryable = exc.code in (429, 500, 502, 503, 504)
+            if retryable and attempt < retries:
+                wait = min(3 * 2 ** attempt, 40)
+                log(f"HTTP {exc.code}; reintento en {wait}s ({attempt}/{retries - 1})")
+                time.sleep(wait)
+                continue
+            log(f"descarga fallida {url}: HTTP {exc.code}")
+            return None, False
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            dest.unlink(missing_ok=True)
+            log(f"descarga fallida {url}: {exc}")
+            return None, False
+    return None, False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Reproducción
+# ─────────────────────────────────────────────────────────────────────────────
+
+def engine_installed() -> bool:
+    return have("mpvpaper")
+
+
+def running_pids() -> list[int]:
+    data = read_json(PIDFILE, {})
+    pids = [p for p in (data.get("pids") or []) if pid_alive(p)]
+    if not pids and have("pgrep"):
+        try:
+            out = subprocess.run(["pgrep", "-x", "mpvpaper"], capture_output=True, text=True).stdout
+            pids = [int(p) for p in out.splitlines() if p.strip().isdigit()]
+        except Exception:
+            pass
+    return pids
+
+
+def pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except (OSError, ProcessLookupError):
+        return False
+
+
+def mpv_children() -> list[int]:
+    """PIDs de los procesos mpv lanzados por nuestras instancias de mpvpaper."""
+    parents = set(running_pids())
+    if not parents:
+        return []
+    found = []
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            status = (entry / "status").read_text()
+        except OSError:
+            continue
+        name = comm = ""
+        for line in status.splitlines():
+            if line.startswith("Name:"):
+                name = line.split(":", 1)[1].strip()
+            elif line.startswith("PPid:"):
+                comm = int(line.split(":", 1)[1].strip())
+        if name == "mpv" and comm in parents:
+            found.append(int(entry.name))
+    return found
+
+
+def cpu_usage(pids: list[int], interval: float = 0.6) -> float:
+    """% de CPU real (delta de utime+stime / intervalo / nº de CPUs)."""
+    if not pids:
+        return 0.0
+    hz = os.sysconf("SC_CLK_TCK")
+    cores = os.cpu_count() or 1
+
+    def ticks(pid_list):
+        total = 0
+        for pid in pid_list:
+            try:
+                parts = (Path("/proc") / str(pid) / "stat").read_text().rsplit(")", 1)[1].split()
+                total += int(parts[11]) + int(parts[12])   # utime + stime
+            except (OSError, IndexError, ValueError):
+                continue
+        return total
+
+    t0 = ticks(pids)
+    time.sleep(interval)
+    t1 = ticks(pids)
+    return round(max(0.0, (t1 - t0) / hz / interval) * 100.0 / cores, 2)
+
+
+def rss_mb(pids: list[int]) -> float:
+    total = 0
+    for pid in pids:
+        try:
+            for line in (Path("/proc") / str(pid) / "status").read_text().splitlines():
+                if line.startswith("VmRSS:"):
+                    total += int(line.split()[1]) / 1024.0
+        except (OSError, IndexError, ValueError):
+            continue
+    return round(total, 1)
+
+
+def stop(quiet: bool = False) -> None:
+    """Detiene reproducción y libera los sockets IPC."""
+    pids = running_pids()
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
+    deadline = time.time() + 3
+    while time.time() < deadline and any(pid_alive(p) for p in pids):
+        time.sleep(0.1)
+    for pid in pids:
+        if pid_alive(pid):
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
+    if have("pkill"):
+        subprocess.run(["pkill", "-x", "mpvpaper"], check=False,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if RUN.exists():
+        for sock in RUN.glob("*.sock"):
+            sock.unlink(missing_ok=True)
+    PIDFILE.unlink(missing_ok=True)
+    state = read_json(STATE, {})
+    if "current" in state:
+        state["paused"] = False
+        write_json(STATE, state)
+    if pids and not quiet:
+        print("⏹  Fondo detenido.")
+
+
+def ipc_sock(output: str) -> Path:
+    return RUN / f"mpv-{output}.sock"
+
+
+def ipc(output: str, command: str) -> bool:
+    """Envía un comando al socket IPC de mpv."""
+    sock = ipc_sock(output)
+    if not sock.exists():
+        return False
+    try:
+        import socket as _socket
+        with _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM) as s:
+            s.settimeout(2)
+            s.connect(str(sock))
+            s.sendall(json.dumps({"command": command.split()}).encode())
+            s.recv(4096)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def play(target: str | None = None, add_to_playlist: bool = False) -> dict:
+    if not engine_installed():
+        die("mpvpaper no está instalado. Ejecuta:  wallmotion setup")
+
+    if target:
+        item = find_item(target)
+        if item is None:
+            path = Path(os.path.expanduser(target))
+            if path.exists():
+                item, _ = import_file(path)
+            else:
+                die(f"No encuentro el fondo '{target}'. Prueba:  wallmotion list")
+        else:
+            path = Path(item["path"])
+        if not path.exists():
+            die(f"El archivo ya no existe: {path}")
+    else:
+        state = read_json(STATE, {})
+        item = find_item(state.get("current", "")) if state.get("current") else None
+        if item is None:
+            items = library()
+            if not items:
+                die("Biblioteca vacía. Añade fondos con:  wallmotion add <archivo>")
+            item = items[0]
+
+    screens = outputs()
+    if not screens:
+        log("hyprctl no reporta salidas; uso ALL")
+        screens = ["ALL"]
+
+    stop(quiet=True)
+    RUN.mkdir(parents=True, exist_ok=True)
+
+    # Detener hyprpaper para evitar colisión de capas Wayland (background) y liberar RAM
+    try:
+        subprocess.run(
+            ["systemctl", "--user", "stop", "hyprpaper.service"],
+            check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        pass
+
+    pids = []
+    opts = f"{MPV_OPTS}"
+    for screen in screens:
+        sock = ipc_sock(screen)
+        sock.unlink(missing_ok=True)
+        cmd = [
+            "mpvpaper",
+            "--mpv-options", f"{opts} input-ipc-server={sock}",
+            screen, str(path),
+        ]
+        try:
+            proc = subprocess.Popen(
+                cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                start_new_session=True,
+            )
+        except OSError as exc:
+            log(f"no se pudo lanzar mpvpaper: {exc}")
+            die(f"Error al lanzar mpvpaper: {exc}")
+        pids.append(proc.pid)
+        time.sleep(0.35)  # deja tiempo a mpv abrir el socket
+
+    write_json(PIDFILE, {"pids": pids, "started": time.time()})
+
+    state = read_json(STATE, {})
+    state.update({
+        "current": item.get("id", ""),
+        "title": item.get("title", ""),
+        "path": str(path),
+        "started": time.time(),
+        "paused": False,
+    })
+    if add_to_playlist:
+        plist = state.get("playlist") or []
+        if item.get("id") not in plist:
+            plist.append(item.get("id", ""))
+        state["playlist"] = plist
+    write_json(STATE, state)
+
+    res = item.get("resolution") or f"{item.get('width')}x{item.get('height')}"
+    print(f"▶  {item.get('title')}  ({res}, {item.get('vcodec', '?')})")
+    return item
+
+
+def pause_resume(action: str) -> None:
+    screens = outputs() or ["ALL"]
+    for screen in screens:
+        ok = ipc(screen, "set_property pause yes" if action == "pause"
+                 else "set_property pause no")
+        if not ok and action == "resume":
+            ok = ipc(screen, "set_property pause no")
+    state = read_json(STATE, {})
+    state["paused"] = (action == "pause")
+    write_json(STATE, state)
+    icon = "⏸" if action == "pause" else "▶"
+    print(f"{icon}  Reproducción: {action}")
+
+
+def step(direction: str) -> None:
+    items = library()
+    if not items:
+        die("Biblioteca vacía.")
+    state = read_json(STATE, {})
+    current = state.get("current", "")
+
+    if direction == "random":
+        pick = items[0] if len(items) == 1 else __import__("random").choice(items)
+        play(pick["id"])
+        return
+
+    ids = [i["id"] for i in items]
+    if current not in ids:
+        play(ids[0])
+        return
+    idx = ids.index(current)
+    idx = (idx + (1 if direction == "next" else -1)) % len(ids)
+    play(ids[idx])
+
+
+def status() -> dict:
+    state = read_json(STATE, {})
+    pids = running_pids()
+    kids = mpv_children()
+    running = bool(pids)
+    return {
+        "engine": "mpvpaper",
+        "engine_ok": engine_installed(),
+        "running": running,
+        "pids": pids,
+        "current": state.get("current", ""),
+        "title": state.get("title", ""),
+        "paused": bool(state.get("paused", False)),
+        "cpu": cpu_usage(pids + kids) if running else 0.0,
+        "mem_mb": rss_mb(pids + kids) if running else 0.0,
+        "count": len(library()),
+        "outputs": outputs(),
+    }
+
+
+def cmd_status(_args) -> None:
+    s = status()
+    if not s["engine_ok"]:
+        print("✗ mpvpaper no instalado →  wallmotion setup")
+        return
+    if not s["running"]:
+        print("○ Sin fondo activo.   Galería:  wallmotion gallery")
+        return
+    print(f"▶  {s['title']}")
+    print(f"   {'⏸ en pausa' if s['paused'] else 'reproduciendo'}"
+          f"  ·  CPU {s['cpu']}%  ·  RAM {s['mem_mb']} MB"
+          f"  ·  {', '.join(s['outputs']) or 'ALL'}")
+    if s["mem_mb"] > 700:
+        print("   ! RAM alta. Si crece con el tiempo:  wallmotion stop  y  wallmotion restore")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Colección curada (vídeos libres de derechos en Wikimedia Commons)
+# ─────────────────────────────────────────────────────────────────────────────
+
+COMMONS_API = "https://commons.wikimedia.org/w/api.php"
+UA = "wallmotion/1.0 (Hyprland animated wallpaper; contacto: local)"
+
+# Temas elegidos por frecuencia: movimiento suave, bucle natural y
+# composición horizontal. Pensados para no distraer del escritorio.
+DEFAULT_THEMES = [
+    "timelapse clouds", "timelapse forest", "aurora timelapse", "waterfall",
+    "stars timelapse", "ocean waves", "city timelapse", "nebula",
+    "milky way", "snow timelapse", "grass field wind", "rain window",
+]
+
+MIN_WIDTH = 1280
+MAX_MB = 90
+DOWNLOAD_DELAY = 3.0        # segundos entre descargas (uso educationado)
+RETRIES = 3
+
+
+def _commons_get(params: dict) -> dict:
+    query = "&".join(f"{k}={urllib.parse.quote(str(v))}" for k, v in params.items())
+    req = urllib.request.Request(f"{COMMONS_API}?{query}",
+                                 headers={"User-Agent": UA})
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read() or b"{}")
+
+
+def _clean_title(raw: str) -> str:
+    """'File:Google Earth Timelapse- Columbia Glacier, Alaska.webm' → legible."""
+    name = re.sub(r"^File:", "", raw)
+    name = re.sub(r"\.(webm|ogv|ogg|mp4|mov)$", "", name, flags=re.I)
+    name = name.replace("_", " ")
+    name = re.sub(r"\s*\(\s*\d{4}\s*\)\s*$", "", name)          # (2018)
+    name = re.sub(r"\s+Video by .*$", "", name, flags=re.I)
+    name = re.sub(r"\s+-\s+", ", ", name)
+    name = re.sub(r"\s*[-,]\s*$", "", name)
+    return re.sub(r"\s{2,}", " ", name).strip()
+
+
+def _commons_titles(theme: str, limit: int) -> list[str]:
+    """Busca títulos. La búsqueda de Commons exige TODAS las palabras, así que
+    si el tema es demasiado específico se relaja quitando palabras."""
+    words = theme.split()
+    attempts = [" ".join(words), " ".join(words[:2]), words[0]]
+    seen, titles = set(), []
+    for query in attempts:
+        if not query:
+            continue
+        try:
+            found = _commons_get({
+                "action": "query", "format": "json", "list": "search",
+                "srsearch": f"filetype:video {query}", "srnamespace": 6,
+                "srlimit": limit,
+            })
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            log(f"búsqueda fallida '{query}': {exc}")
+            time.sleep(5)
+            continue
+        for page in found.get("query", {}).get("search", []):
+            title = page.get("title")
+            if title and title not in seen:
+                seen.add(title)
+                titles.append(title)
+        if len(titles) >= limit:
+            break
+        time.sleep(1.5)
+    return titles
+
+
+def _commons_search(theme: str, limit: int = 8) -> list[dict]:
+    """Devuelve candidatos horizontales, con proporción razonable y ligeros."""
+    titles = _commons_titles(theme, limit)
+    if not titles:
+        return []
+
+    try:
+        info = _commons_get({
+            "action": "query", "format": "json", "prop": "imageinfo",
+            "iiprop": "url|size|mime|extmetadata",
+            "titles": "|".join(titles),
+        })
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        log(f"metadatos fallidos '{theme}': {exc}")
+        return []
+
+    candidates = []
+    for page in info.get("query", {}).get("pages", {}).values():
+        meta = (page.get("imageinfo") or [{}])[0]
+        url = meta.get("url", "")
+        size = meta.get("size", 0)
+        width, height = meta.get("width", 0), meta.get("height", 0)
+        if not url or not url.lower().startswith(("http://", "https://")):
+            continue
+        if width < MIN_WIDTH or width <= height:      # solo horizontal
+            continue
+        aspect = width / height if height else 0
+        if not 1.3 <= aspect <= 2.4:   # descarta panoramas ultranchos y 4:3
+            continue
+        if size > MAX_MB * 1024 * 1024:                # no saturar disco/RAM
+            continue
+        url = url.split("?")[0]                        # fuera parámetros de analítica
+        ext = (page.get("imageinfo") or [{}])[0].get("extmetadata", {})
+        candidates.append({
+            "title": _clean_title(page.get("title", "Fondo")),
+            "url": url,
+            "tags": theme,
+            "license": (ext.get("LicenseShortName", {}) or {}).get("value", ""),
+            "source": f"https://commons.wikimedia.org/wiki/{urllib.parse.quote(page.get('title', '').replace(' ', '_'))}",
+        })
+    return candidates
+
+
+MIXKIT_CATS = [
+    "nature", "city", "sea", "space", "weather", "forest",
+    "abstract", "night", "clouds", "desert",
+]
+
+
+def _http_text(url: str) -> str:
+    req = urllib.request.Request(url, headers={
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) wallmotion/1.0",
+    })
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return resp.read().decode("utf-8", "ignore")
+
+
+def _remote_size(url: str) -> tuple[int, int]:
+    """Dimensiones de un vídeo por URL, sin descargarlo (ffprobe en streaming)."""
+    if not have("ffprobe"):
+        return 0, 0
+    try:
+        raw = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-print_format", "csv=p=0",
+             "-select_streams", "v:0", "-show_entries", "stream=width,height", url],
+            capture_output=True, text=True, timeout=45,
+        ).stdout.strip()
+        w, _, h = raw.partition(",")
+        return int(w or 0), int(h or 0)
+    except (subprocess.SubprocessError, ValueError):
+        return 0, 0
+
+
+def _title_from_slug(slug: str) -> str:
+    """'/free-stock-video/waterfall-in-forest-2213/' → 'Waterfall in forest'"""
+    segments = [s for s in slug.split("/") if s]
+    name = re.sub(r"-\d+$", "", segments[-1] if segments else slug)
+    return name.replace("-", " ").strip().capitalize() or "Fondo"
+
+
+def mixkit_candidates(want: int, seen: set[str]) -> list[dict]:
+    """Vídeos de stock gratuitos de Mixkit (sin límite de descargas observed)."""
+    out: list[dict] = []
+    for cat in MIXKIT_CATS:
+        if len(out) >= want:
+            break
+        try:
+            html = _http_text(f"https://mixkit.co/free-stock-video/{cat}/")
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            log(f"mixkit '{cat}': {exc}")
+            time.sleep(3)
+            continue
+
+        titles = {
+            aid: _title_from_slug(slug)
+            for slug, aid in re.findall(
+                r'href="(/free-stock-video/[a-z0-9-]+?)-(\d+)/"', html)
+        }
+        for aid in dict.fromkeys(re.findall(
+                r"https://assets\.mixkit\.co/videos/(\d+)/", html)):
+            if aid in seen:
+                continue
+            seen.add(aid)
+            # 1080p si existe; si no, 720p (más ligero para decodificar).
+            url = f"https://assets.mixkit.co/videos/{aid}/{aid}-1080.mp4"
+            width, height = _remote_size(url)
+            if not width:
+                url = f"https://assets.mixkit.co/videos/{aid}/{aid}-720.mp4"
+                width, height = _remote_size(url)
+            if width < MIN_WIDTH or width <= height:
+                continue
+            aspect = width / height if height else 0
+            if not 1.3 <= aspect <= 2.4:
+                continue
+            out.append({
+                "title": titles.get(aid) or f"Fondo {cat}",
+                "url": url, "tags": cat,
+                "license": "Mixkit Free License",
+                # Clave única por vídeo: permite no volver a descargarlo.
+                "source": url,
+                "page": f"https://mixkit.co/free-stock-video/{cat}/",
+            })
+        time.sleep(2)
+    return out
+
+
+def curate(count: int = 12, query: str = "") -> int:
+    """Descarga una colección de vídeos libres a la galería."""
+    print(f"Buscando {count} fondos…")
+
+    owned = {i.get("source") for i in library() if i.get("source")}
+    seen: set[str] = set()
+    queue: list[dict] = []
+
+    # 1) Mixkit: fiable y sin límites agresivos.
+    if not query:
+        queue = mixkit_candidates(count * 2, seen)
+    # 2) Wikimedia Commons: completa con vídeos de dominio público.
+    themes = [query] if query else DEFAULT_THEMES
+    if len(queue) < count * 2:
+        for theme in themes:
+            if len(queue) >= count * 2:
+                break
+            for cand in _commons_search(theme, limit=8):
+                if cand["url"] not in seen:
+                    seen.add(cand["url"])
+                    queue.append(cand)
+
+    queue = [c for c in queue if c.get("source") not in owned]
+    if not queue:
+        print("✓ Nada nuevo que añadir (o sin resultados para ese tema).")
+        return 0
+
+    added = failed = 0
+    for index, cand in enumerate(queue):
+        if added >= count:
+            break
+        # Descarga educada: los servidores cortan peticiones encadenadas.
+        if index:
+            time.sleep(DOWNLOAD_DELAY)
+        item, is_new = import_url(
+            cand["url"], title=cand["title"], tags=cand["tags"],
+            extra={"source": cand["source"],
+                   "page": cand.get("page", cand["source"]),
+                   "license": cand["license"]},
+        )
+        if not item:
+            failed += 1
+            print(f"  ! {cand['title'][:56]} — no se pudo descargar")
+            continue
+        if not is_new:
+            continue
+        added += 1
+        print(f"  ✓ {cand['title'][:60]}")
+
+    if added:
+        print(f"\n✓ {added} fondos añadidos.  Ábrelos con:  wallmotion gallery")
+    if failed:
+        print(f"  {failed} descargas fallaron (límite de peticiones del servidor). "
+              "Reinténtalo en unos minutos.")
+    return added
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Arranque automático
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Ruta absoluta: Hyprland puede arrancar sesión sin ~/.local/bin en el PATH
+# (p. ej. desde el gestor gráfico, que solo lee ~/.profile).
+SELF = Path(__file__).resolve()
+AUTOSTART_LINE = f"exec-once = {SELF} restore"
+IDLE_BLOCK = """
+# ── wallmotion: pausa el fondo al bloquear ──
+listener {
+    timeout = 60
+    on-timeout = {pause}
+}
+listener {
+    timeout = 60
+    on-timeout = hyprlock
+    on-resume = {resume}
+}
+# Fin wallmotion
+"""
+
+
+def autostart(action: str = "status") -> None:
+    HYPR_CONF.mkdir(parents=True, exist_ok=True)
+    target = HYPR_CONF / "hyprpaper.conf"
+    marker = "wallmotion restore"
+
+    if action == "status":
+        body = target.read_text(encoding="utf-8") if target.exists() else ""
+        print("✓ Arranque automático activo" if marker in body
+              else "○ Arranque automático inactivo  →  wallmotion autostart enable")
+        return
+
+    if action == "enable":
+        body = target.read_text(encoding="utf-8") if target.exists() else ""
+        if marker in body:
+            print("· Ya estaba activo.")
+            return
+        # Sustituye una línea antigua si apunta a otra ruta.
+        lines = [ln for ln in body.splitlines() if marker not in ln]
+        lines += ["", "# ── wallmotion: fondos animados ──", AUTOSTART_LINE,
+                  "# Fin wallpaper animado"]
+        target.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        print(f"✓ Arranque automático añadido en {target}")
+        print(f"  línea: {AUTOSTART_LINE}")
+        return
+
+    if action == "disable":
+        if target.exists():
+            body = _remove_block(target.read_text(encoding="utf-8"),
+                                 "wallmotion: fondos animados")
+            target.write_text(body, encoding="utf-8")
+        print("✓ Arranque automático desactivado")
+
+
+def _remove_block(text: str, marker: str) -> str:
+    """Elimina un bloque delimitado por '# ── <marker>' y '# Fin wallmotion'."""
+    start = text.find("# ── " + marker)
+    if start == -1:
+        return text
+    end = text.find("# Fin wallmotion", start)
+    if end == -1:
+        return text[:start].rstrip() + "\n"
+    return (text[:start].rstrip() + "\n\n" + text[end + len("# Fin wallmotion"):].lstrip("\n"))
+
+
+def idle(action: str = "status") -> None:
+    """Integra la pausa del fondo con hypridle/hyprlock."""
+    target = HYPR_CONF / "hypridle.conf"
+    marker = "wallmotion: pausa el fondo"
+
+    if action == "status":
+        body = target.read_text(encoding="utf-8") if target.exists() else ""
+        print("✓ Pausa al bloquear activa" if marker in body
+              else "○ Pausa al bloquear inactiva  →  wallmotion idle enable")
+        return
+
+    if action == "enable":
+        HYPR_CONF.mkdir(parents=True, exist_ok=True)
+        body = target.read_text(encoding="utf-8") if target.exists() else ""
+        if marker in body:
+            print("· Ya estaba activo.")
+            return
+        # .format() no sirve: el bloque contiene llaves de Hyprland.
+        block = (IDLE_BLOCK.replace("{pause}", f"{SELF} pause")
+                 .replace("{resume}", f"{SELF} resume"))
+        with target.open("a", encoding="utf-8") as fh:
+            fh.write("\n" + block)
+        print(f"✓ Pausa al bloquear añadida en {target}")
+        print("  hypridle pausará el vídeo tras 60 s de inactividad y")
+        print("  lo reanudará al desbloquear. Reinicia Hyprland para aplicarlo.")
+        return
+
+    if action == "disable":
+        if not target.exists():
+            print("○ Nada que hacer.")
+            return
+        cleaned = _remove_block(target.read_text(encoding="utf-8"), marker)
+        target.write_text(cleaned, encoding="utf-8")
+        print("✓ Pausa al bloquear desactivada")
+
+
+def restore() -> None:
+    """Reanuda el último fondo al iniciar sesión."""
+    state = read_json(STATE, {})
+    if state.get("current") and find_item(state["current"]):
+        play(state["current"])
+    else:
+        log("sin fondo previo; nada que restaurar")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Galería web
+# ─────────────────────────────────────────────────────────────────────────────
+
+GALLERY_HTML = r"""<!DOCTYPE html>
+<html lang="es"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>wallmotion · galería</title>
+<style>
+  :root{
+    --bg:#0b0d12; --card:#12151d; --card-h:#181c26; --line:#232838;
+    --fg:#e8ecf5; --mut:#8891a6; --acc:#7dd3fc; --acc2:#c084fc; --ok:#4ade80;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--fg);
+    font:14px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    min-height:100vh;padding:28px 32px 60px}
+  header{display:flex;flex-wrap:wrap;gap:18px;align-items:center;
+    justify-content:space-between;margin-bottom:24px}
+  h1{font-size:22px;font-weight:650;letter-spacing:-.02em;display:flex;
+    align-items:center;gap:10px}
+  h1 span{background:linear-gradient(100deg,var(--acc),var(--acc2));
+    -webkit-background-clip:text;background-clip:text;color:transparent}
+  .sub{color:var(--mut);font-size:13px}
+  .pill{background:var(--card);border:1px solid var(--line);border-radius:999px;
+    padding:5px 12px;font-size:12px;color:var(--mut);white-space:nowrap}
+  .pill b{color:var(--fg);font-weight:600}
+  .pill.live b{color:var(--ok)}
+  .bar{display:flex;gap:10px;align-items:center;margin-bottom:22px;flex-wrap:wrap}
+  input[type=search]{flex:1;min-width:220px;background:var(--card);
+    border:1px solid var(--line);border-radius:10px;padding:11px 15px;
+    color:var(--fg);font-size:14px;outline:none;transition:.16s}
+  input[type=search]:focus{border-color:var(--acc);box-shadow:0 0 0 3px #7dd3fc1f}
+  button{background:var(--card);border:1px solid var(--line);color:var(--fg);
+    border-radius:10px;padding:10px 15px;font-size:13px;cursor:pointer;
+    transition:.16s;font-weight:500}
+  button:hover{background:var(--card-h);border-color:#313a4f;transform:translateY(-1px)}
+  button.primary{background:linear-gradient(100deg,#0ea5e9,#a855f7);
+    border-color:transparent;color:#fff}
+  button.primary:hover{filter:brightness(1.12)}
+  .grid{display:grid;gap:16px;
+    grid-template-columns:repeat(auto-fill,minmax(248px,1fr))}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:13px;
+    overflow:hidden;cursor:pointer;position:relative;
+    transition:transform .18s cubic-bezier(.2,.8,.3,1),border-color .18s,box-shadow .18s}
+  .card:hover{transform:translateY(-3px);border-color:#39425a;
+    box-shadow:0 12px 30px #0006}
+  .card.active{border-color:var(--acc);box-shadow:0 0 0 2px #7dd3fc40}
+  .thumb{aspect-ratio:16/9;background:#0d1017 center/cover no-repeat;
+    display:flex;align-items:center;justify-content:center;position:relative}
+  .thumb video{width:100%;height:100%;object-fit:cover;display:none}
+  .card:hover video{display:block}
+  .meta{padding:11px 13px}
+  .title{font-size:13px;font-weight:550;margin-bottom:6px;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .info{font-size:11px;color:var(--mut);display:flex;gap:8px;flex-wrap:wrap}
+  .tag{background:#1c2130;border-radius:5px;padding:2px 7px;font-size:10px;color:#9aa5bd}
+  .badge{position:absolute;top:9px;right:9px;background:#000b;color:var(--ok);
+    border:1px solid #4ade8055;border-radius:6px;padding:3px 8px;
+    font-size:10px;font-weight:700;letter-spacing:.04em;backdrop-filter:blur(4px)}
+  .empty{text-align:center;color:var(--mut);padding:70px 20px;line-height:1.9}
+  .empty code{background:var(--card);padding:2px 8px;border-radius:6px;
+    border:1px solid var(--line);font-size:13px;color:var(--acc)}
+  .toast{position:fixed;left:50%;bottom:30px;transform:translate(-50%,80px);
+    background:#1c2130;border:1px solid var(--line);border-radius:10px;
+    padding:12px 22px;font-size:13px;opacity:0;transition:.28s;
+    box-shadow:0 10px 34px #000a;z-index:9}
+  .toast.on{transform:translate(-50%,0);opacity:1}
+</style></head><body>
+<header>
+  <div>
+    <h1>fondos <span>animados</span></h1>
+    <div class="sub">Clic para aplicar · vídeo con decodificación por hardware</div>
+  </div>
+  <div class="pill live">CPU <b id="cpu">–</b> · RAM <b id="mem">–</b> MB</div>
+  <div class="pill"><b id="count">0</b> fondos</div>
+</header>
+<div class="bar">
+  <input type="search" id="q" placeholder="Buscar por nombre o etiqueta…  (pulsa /)" autocomplete="off">
+  <button id="prev">‹ Anterior</button>
+  <button id="next">Siguiente ›</button>
+  <button id="rand">Aleatorio</button>
+  <button id="pau">Pausar</button>
+  <button id="stop">Detener</button>
+</div>
+<div class="grid" id="grid"></div>
+<div class="toast" id="toast"></div>
+<script>
+const $ = s => document.querySelector(s);
+let LIB = [], Q = "";
+
+async function api(path, body){
+  const r = await fetch(path, body ? {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify(body) } : {});
+  return r.json();
+}
+
+function toast(msg){
+  const t = $('#toast'); t.textContent = msg; t.classList.add('on');
+  clearTimeout(t._h); t._h = setTimeout(()=>t.classList.remove('on'), 2200);
+}
+
+function match(item){
+  if(!Q) return true;
+  const hay = (item.title + ' ' + (item.tags||[]).join(' ') + ' ' +
+               item.vcodec + ' ' + item.width + 'x' + item.height).toLowerCase();
+  return Q.split(/\s+/).every(w => hay.includes(w));
+}
+
+function render(){
+  const grid = $('#grid');
+  const items = LIB.filter(match);
+  if(!items.length){
+    grid.innerHTML = LIB.length
+      ? '<div class="empty" style="grid-column:1/-1">Ningún fondo coincide con la búsqueda.</div>'
+      : '<div class="empty" style="grid-column:1/-1">Tu galería está vacía.<br><br>'
+        + '<code>wallmotion add ~/Videos/fondo.mp4</code><br>'
+        + '<code>wallmotion curate</code> &nbsp;→ descarga una colección gratis</div>';
+    return;
+  }
+  grid.innerHTML = items.map(it => `
+    <div class="card ${it.id===CUR?'active':''}" data-id="${it.id}">
+      <div class="thumb" style="background-image:url('/thumb/${encodeURIComponent(it.id)}.jpg')">
+        <video muted loop preload="none" src="/file/${encodeURIComponent(it.id)}"></video>
+        ${it.id===CUR?'<span class="badge">ACTIVO</span>':''}
+      </div>
+      <div class="meta">
+        <div class="title" title="${it.title}">${it.title}</div>
+        <div class="info">
+          <span>${it.width}×${it.height}</span>
+          <span>${dur(it.duration)}</span>
+          <span>${it.vcodec||'?'}</span>
+          <span>${sz(it.size)}</span>
+          ${(it.tags||[]).slice(0,2).map(t=>`<span class="tag">${t}</span>`).join('')}
+        </div>
+      </div>
+    </div>`).join('');
+
+  grid.querySelectorAll('.card').forEach(c => {
+    c.onclick = async () => {
+      const id = c.dataset.id;
+      toast('Cargando ' + id + '…');
+      const r = await api('/api/apply', { id });
+      if(r.ok){ CUR = id; render(); toast('✓ Fondo aplicado'); refresh(); }
+      else toast('✗ ' + (r.error||'error'));
+    };
+    const v = c.querySelector('video');
+    c.addEventListener('mouseenter', () => { v.play().catch(()=>{}); });
+    c.addEventListener('mouseleave', () => { v.pause(); v.currentTime = 0; });
+  });
+}
+
+const dur = s => `${Math.floor((s||0)/60)}:${String(Math.floor((s||0)%60)).padStart(2,'0')}`;
+const sz  = b => b>1073741824 ? (b/1073741824).toFixed(1)+' GB'
+                  : b>1048576 ? (b/1048576).toFixed(0)+' MB' : (b/1024).toFixed(0)+' KB';
+
+let CUR = '';
+async function refresh(){
+  const s = await api('/api/state');
+  CUR = s.current || '';
+  $('#cpu').textContent = s.running ? s.cpu + '%' : 'idle';
+  $('#mem').textContent  = s.running ? s.mem_mb : '0';
+  $('#count').textContent = s.count;
+  $('#pau').textContent = s.paused ? 'Reanudar' : 'Pausar';
+}
+
+$('#q').oninput = e => { Q = e.target.value.trim().toLowerCase(); render(); };
+document.addEventListener('keydown', e => {
+  if(e.key === '/' && document.activeElement !== $('#q')){ e.preventDefault(); $('#q').focus(); }
+  if(e.key === 'Escape'){ $('#q').value=''; Q=''; render(); $('#q').blur(); }
+});
+
+async function cmd(action, msg){
+  const r = await api('/api/command', { action });
+  toast(r.ok ? '✓ ' + msg : '✗ ' + (r.error||'error'));
+  refresh(); render();
+}
+$('#prev').onclick = () => cmd('prev','Anterior');
+$('#next').onclick = () => cmd('next','Siguiente');
+$('#rand').onclick = () => cmd('random','Aleatorio');
+$('#pau').onclick  = () => cmd('toggle','Listo');
+$('#stop').onclick = () => cmd('stop','Detenido');
+
+(async () => {
+  const d = await api('/api/library');
+  LIB = d.items || [];
+  await refresh();
+  render();
+  setInterval(refresh, 2000);
+})();
+</script></body></html>
+"""
+
+
+class GalleryHandler(BaseHTTPRequestHandler):
+    server_version = "wallmotion"
+
+    def log_message(self, *_args):  # silencia el log del servidor
+        pass
+
+    # ── utilidades ──
+    def _send(self, code, body=b"", ctype="text/plain; charset=utf-8"):
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+    def _json(self, data, code=200):
+        self._send(code, json.dumps(data, ensure_ascii=False).encode(),
+                   "application/json; charset=utf-8")
+
+    def _body(self) -> dict:
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+            return json.loads(self.rfile.read(n) or b"{}") if n else {}
+        except (ValueError, OSError):
+            return {}
+
+    def _resolve(self, key: str) -> Path | None:
+        """Resuelve un id de la biblioteca a ruta real (anti path traversal)."""
+        item = find_item(key)
+        if not item:
+            return None
+        path = Path(item["path"]).resolve()
+        if not path.exists() or LIB.resolve() not in path.parents:
+            return None
+        return path
+
+    # ── GET ──
+    def do_GET(self):
+        route = self.path.split("?")[0]
+
+        if route in ("/", "/index.html"):
+            return self._send(200, GALLERY_HTML.encode(), "text/html; charset=utf-8")
+
+        if route == "/api/library":
+            return self._json({"items": library()})
+
+        if route == "/api/state":
+            return self._json(status())
+
+        if route.startswith("/file/"):
+            path = self._resolve(unquote(route[6:]))
+            if not path:
+                return self._send(404, b"no encontrado")
+            ctype = mimetypes.guess_type(path.name)[0] or "video/mp4"
+            with path.open("rb") as fh:
+                data = fh.read()
+            return self._send(200, data, ctype)
+
+        if route.startswith("/thumb/"):
+            name = unquote(route[7:]).removesuffix(".jpg")
+            thumb = (THUMBS / f"{name}.jpg").resolve()
+            if not thumb.exists() or THUMBS.resolve() not in thumb.parents:
+                return self._send(404, b"no encontrado")
+            return self._send(200, thumb.read_bytes(), "image/jpeg")
+
+        self._send(404, b"ruta desconocida")
+
+    # ── POST ──
+    def do_POST(self):
+        route = self.path.split("?")[0]
+        body = self._body()
+
+        if route == "/api/apply":
+            ident = str(body.get("id") or "")
+            if not find_item(ident):
+                return self._json({"ok": False, "error": "fondo no encontrado"})
+            try:
+                play(ident)
+            except SystemExit:
+                return self._json({"ok": False, "error": "no se pudo reproducir"})
+            return self._json({"ok": True})
+
+        if route == "/api/command":
+            action = str(body.get("action") or "")
+            try:
+                if action in ("next", "prev", "random"):
+                    step(action)
+                elif action == "stop":
+                    stop()
+                elif action == "toggle":
+                    pause_resume("resume" if status()["paused"] else "pause")
+                elif action == "pause":
+                    pause_resume("pause")
+                elif action == "resume":
+                    pause_resume("resume")
+                else:
+                    return self._json({"ok": False, "error": f"acción '{action}' desconocida"})
+            except SystemExit as exc:
+                return self._json({"ok": False, "error": str(exc)})
+            return self._json({"ok": True})
+
+        self._json({"ok": False, "error": "ruta desconocida"}, 404)
+
+
+def cmd_gallery(args) -> None:
+    port = args.port or 7373
+    if not library():
+        print("! Tu galería está vacía. Añade fondos con:")
+        print("    wallmotion curate           (colección gratis)")
+        print("    wallmotion add ~/Videos/*.mp4")
+    srv = ThreadingHTTPServer(("127.0.0.1", port), GalleryHandler)
+    url = f"http://127.0.0.1:{port}/"
+    print(f"🖼  Galería en {url}   (Ctrl+C para cerrar)")
+    try:
+        if shutil.which("xdg-open"):
+            subprocess.Popen(["xdg-open", url], start_new_session=True)
+    except OSError:
+        pass
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        print("\nGalería cerrada.")
+        srv.shutdown()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Instalación
+# ─────────────────────────────────────────────────────────────────────────────
+
+def cmd_setup(_args) -> None:
+    installer = SELF.with_name("wallmotion-install")
+    print("═" * 62)
+    print("  wallmotion · estado de la instalación")
+    print("═" * 62)
+
+    missing = [b for b in ("ffmpeg", "ffprobe") if not have(b)]
+    if missing:
+        print(f"✗ Falta en el sistema: {', '.join(missing)}")
+    else:
+        print("✓ ffmpeg y ffprobe presentes  (miniaturas y análisis de vídeo)")
+
+    if engine_installed():
+        print("✓ mpvpaper instalado  (motor de reproducción)")
+    else:
+        print("✗ mpvpaper NO instalado  (falta el motor de vídeo)")
+        print()
+        print("  Ejecuta esto y escribe tu contraseña cuando la pida:")
+        print(f"    bash {installer}")
+        print()
+        print("  Instalará mpv + mpvpaper. No necesita ningún helper AUR.")
+        return
+
+    autostart("enable")
+    idle("enable")
+    state = read_json(STATE, {})
+    print()
+    print(f"✓ Biblioteca: {len(library())} fondos")
+    if state.get("current"):
+        print("→ Restaura tu último fondo con:  wallmotion restore")
+    print("→ Abre la galería con:           wallmotion gallery")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CLI
+# ─────────────────────────────────────────────────────────────────────────────
+
+def cmd_add(args) -> None:
+    targets = []
+    for raw in args.targets:
+        path = Path(os.path.expanduser(raw))
+        if path.is_dir():
+            targets += sorted(p for p in path.iterdir() if p.suffix.lower() in VIDEO_EXT)
+        elif path.is_file():
+            targets.append(path)
+        elif raw.startswith(("http://", "https://")):
+            targets.append(raw)
+        else:
+            print(f"✗ No encuentro: {raw}", file=sys.stderr)
+
+    if not targets:
+        die("Nada que importar.")
+
+    ok = 0
+    for t in targets:
+        item, is_new = (import_url(str(t), tags=args.tags) if isinstance(t, str)
+                        else import_file(t, tags=args.tags))
+        if not item:
+            print(f"✗ Falló: {t}", file=sys.stderr)
+            continue
+        if not is_new:
+            print(f"· {item['title']} ya estaba en la galería")
+            continue
+        ok += 1
+        print(f"✓ {item['title']}  ({item['width']}×{item['height']}, "
+              f"{fmt_duration(item['duration'])}, {fmt_size(item['size'])})")
+    print(f"\n{ok} añadidos.  Ábrelos con:  wallmotion gallery")
+
+
+def cmd_list(args) -> None:
+    items = library()
+    if not items:
+        print("Biblioteca vacía →  wallmotion curate   o   wallmotion add <archivo>")
+        return
+    state = read_json(STATE, {})
+    cur = state.get("current", "")
+    print(f"\n{'#':>3}  {'TÍTULO':<38} {'RESOLUCIÓN':<11} {'DUR':<6} {'TAMAÑO':<9} CODEC")
+    print("─" * 96)
+    for i, it in enumerate(items):
+        mark = "▶" if it["id"] == cur else " "
+        res = f"{it['width']}x{it['height']}"
+        print(f"{mark}{i:>3}  {it['title'][:38]:<38} {res:<11} "
+              f"{fmt_duration(it['duration']):<6} {fmt_size(it['size']):<9} {it['vcodec'] or '?'}")
+    print(f"\n{len(items)} fondos.")
+
+
+def cmd_rm(args) -> None:
+    items = library()
+    item = find_item(args.ref)
+    if not item:
+        die(f"No encuentro '{args.ref}'")
+    Path(item["path"]).unlink(missing_ok=True)
+    if item.get("thumb"):
+        Path(item["thumb"]).unlink(missing_ok=True)
+    save_library([i for i in items if i["id"] != item["id"]])
+    print(f"✓ Eliminado: {item['title']}")
+
+
+def cmd_search(args) -> None:
+    items = library()
+    q = args.query.lower()
+    hits = [i for i in items if q in (i["title"] + " " + " ".join(i.get("tags", []))).lower()]
+    if not hits:
+        print("Sin resultados.")
+        return
+    for it in hits:
+        print(f"{it['id']:<28} {it['title']}")
+    print(f"\nAplica con:  wallmotion play <id>")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        prog="wallmotion",
+        description="Fondos animados para Hyprland · motor mpvpaper + galería web local",
+    )
+    sub = parser.add_subparsers(dest="cmd")
+
+    p = sub.add_parser("play", help="aplica un fondo (id, archivo o url)")
+    p.add_argument("target", nargs="?", help="id de la galería, ruta o URL")
+
+    sub.add_parser("pause", help="pausa la reproducción")
+    sub.add_parser("resume", help="reanuda la reproducción")
+    sub.add_parser("stop", help="detiene el fondo")
+    sub.add_parser("status", help="estado actual + CPU real")
+    sub.add_parser("next", help="siguiente fondo")
+    sub.add_parser("prev", help="fondo anterior")
+    sub.add_parser("random", help="fondo al azar")
+    sub.add_parser("restore", help="reexecuta el último fondo (arranque)")
+
+    p = sub.add_parser("add", help="importa vídeos")
+    p.add_argument("targets", nargs="+")
+    p.add_argument("--tags", default="")
+
+    p = sub.add_parser("curate", help="descarga una colección gratis (Mixkit + Wikimedia)")
+    p.add_argument("-n", "--count", type=int, default=12)
+    p.add_argument("-q", "--query", default="")
+
+    p = sub.add_parser("gallery", help="abre la galería web")
+    p.add_argument("--port", type=int)
+
+    p = sub.add_parser("rm", help="elimina un fondo")
+    p.add_argument("ref")
+
+    p = sub.add_parser("search", help="busca en la biblioteca")
+    p.add_argument("query")
+
+    p = sub.add_parser("list", help="lista la biblioteca")
+    p.set_defaults(func=lambda a: cmd_list(a))
+
+    p = sub.add_parser("autostart", help="enable | disable | status")
+    p.add_argument("action", nargs="?", default="status",
+                   choices=["enable", "disable", "status"])
+
+    p = sub.add_parser("idle", help="pausa el fondo al bloquear la pantalla")
+    p.add_argument("action", nargs="?", default="status",
+                   choices=["enable", "disable", "status"])
+
+    sub.add_parser("setup", help="comprueba e instala")
+
+    args = parser.parse_args()
+    table = {
+        "play": lambda: play(args.target),
+        "pause": lambda: pause_resume("pause"),
+        "resume": lambda: pause_resume("resume"),
+        "stop": lambda: stop(),
+        "status": lambda: cmd_status(args),
+        "next": lambda: step("next"),
+        "prev": lambda: step("prev"),
+        "random": lambda: step("random"),
+        "restore": restore,
+        "add": lambda: cmd_add(args),
+        "curate": lambda: curate(args.count, args.query),
+        "gallery": lambda: cmd_gallery(args),
+        "list": lambda: cmd_list(args),
+        "rm": lambda: cmd_rm(args),
+        "search": lambda: cmd_search(args),
+        "autostart": lambda: autostart(args.action),
+        "idle": lambda: idle(args.action),
+        "setup": lambda: cmd_setup(args),
+    }
+    if args.cmd in table:
+        table[args.cmd]()
+
+
+if __name__ == "__main__":
+    for d in (CFG, LIB, THUMBS, RUN):
+        d.mkdir(parents=True, exist_ok=True)
+    main()
