@@ -45,19 +45,20 @@ PIDFILE = RUN / "pids.json"
 VIDEO_EXT = {".mp4", ".webm", ".mkv", ".mov", ".m4v", ".avi", ".mkv", ".gif", ".mpg", ".mpeg", ".ogv"}
 
 # mpv ultra-optimizado: fluidez nativa a 60 FPS, decodificación VAAPI por hardware y coste ~0% CPU.
-# - hwdec=vaapi,auto-safe + hwdec-codecs=all: aceleración hardware completa en GPU Intel VDBOX.
-# - profile=fast: desactiva postprocesados costosos y shaders de múltiples pasadas.
-# - scale=bilinear, cscale=bilinear, dscale=bilinear: filtrado por hardware en 1 ciclo de textura sin shaders pesados.
-#   (En pantallas 1080p con vídeos 4K, el downscaling 2:1 entero equivale a SSAA 2x2 nativo y nítido).
-# - video-sync=desync + framedrop=vo: cadencia fluida sincronizada al compositor sin judder ni cortes.
-# - demuxer-max-bytes=16MiB + demuxer-max-back-bytes=0 + cache=no: consumo de RAM acotado estrictamente.
+# - hwdec=vaapi: aceleración hardware directa en GPU Intel VDBOX ASIC (0% carga de CPU).
+# - profile=fast + scale=bilinear: filtrado en 1 ciclo de textura sin shaders pesados.
+# - dither-depth=no + interpolation=no: elimina pasadas de sombreado redundantes en pantalla.
+# - vd-lavc-dr=yes + vd-lavc-threads=1: renderizado directo zero-copy sin hilos extra de software.
+# - demuxer-max-bytes=8MiB + demuxer-max-back-bytes=0 + cache=no: consumo de RAM mínimo estricto.
 MPV_OPTS = (
     "no-audio --no-osc --no-input-default-bindings --no-terminal "
-    "--keep-open=no --loop-playlist=inf --hwdec=vaapi,auto-safe "
+    "--keep-open=no --loop-playlist=inf --hwdec=vaapi "
     "--hwdec-codecs=all --profile=fast "
     "--scale=bilinear --cscale=bilinear --dscale=bilinear "
-    "--video-sync=desync --framedrop=vo --vd-lavc-fast --vd-lavc-threads=2 "
-    "--demuxer-max-bytes=16MiB --demuxer-max-back-bytes=0 --cache=no"
+    "--dither-depth=no --interpolation=no "
+    "--video-sync=desync --framedrop=vo "
+    "--vd-lavc-dr=yes --vd-lavc-fast --vd-lavc-threads=1 "
+    "--demuxer-max-bytes=8MiB --demuxer-max-back-bytes=0 --cache=no"
 )
 
 TAGS_RE = re.compile(r"[^a-z0-9]+")
@@ -522,6 +523,8 @@ def play(target: str | None = None, add_to_playlist: bool = False) -> dict:
         sock = ipc_sock(screen)
         sock.unlink(missing_ok=True)
         cmd = [
+            "nice", "-n", "12",
+            "ionice", "-c", "3",
             "mpvpaper",
             "--mpv-options", f"{opts} input-ipc-server={sock}",
             screen, str(path),
@@ -1306,7 +1309,7 @@ def cmd_gallery(args) -> None:
         print("    wallmotion add ~/Videos/*.mp4")
     srv = ThreadingHTTPServer(("127.0.0.1", port), GalleryHandler)
     url = f"http://127.0.0.1:{port}/"
-    print(f"🖼  Galería en {url}   (Ctrl+C para cerrar)")
+    print(f"Galeria en {url}   (Ctrl+C para cerrar)")
     try:
         if shutil.which("xdg-open"):
             subprocess.Popen(["xdg-open", url], start_new_session=True)

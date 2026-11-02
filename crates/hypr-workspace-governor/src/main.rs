@@ -45,6 +45,7 @@ static WALLPAPER_PAUSED: AtomicBool = AtomicBool::new(false);
 struct ActiveWorkspace {
     id: i32,
     #[serde(default)]
+    #[allow(dead_code)]
     windows: i32,
 }
 
@@ -261,8 +262,9 @@ fn apply_governor(dir: &Path, verbose: bool) {
         Err(_) => return,
     };
 
-    // Auto-pausa de fondos animados si hay ventanas cubriendo el workspace
-    set_wallmotion_pause(active_ws.windows > 0);
+    // El usuario prefiere que el fondo animado siga corriendo fluidamente
+    // incluso con ventanas encima para preservar la sensacion de modernidad.
+    set_wallmotion_pause(false);
 
     let mut last_ws_guard = LAST_WS_ID.lock().unwrap();
     let ws_changed = *last_ws_guard != active_ws.id;

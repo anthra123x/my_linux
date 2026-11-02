@@ -54,3 +54,4 @@ cargo build --release
 # Probar ejecucion directa
 ./target/release/cell-powerd
 ```
+
