@@ -10,6 +10,10 @@ __pycache__/
 *.pyc
 *.pyo
 
+# Compilados de Rust
+target/
+**/target/
+
 # Logs y sockets
 *.log
 *.sock

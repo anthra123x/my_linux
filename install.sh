@@ -136,6 +136,23 @@ if [ -d "$REPO_DIR/scripts" ]; then
     done
 fi
 
+# 5b. Compilar e instalar componentes nativos de Rust en ~/.local/bin
+if command -v cargo >/dev/null 2>&1 && [ -d "$REPO_DIR/crates" ]; then
+    log_info "--- Compilando componentes de Rust ---"
+    for crate_dir in "$REPO_DIR/crates"/*; do
+        if [ -f "$crate_dir/Cargo.toml" ]; then
+            cname="$(basename "$crate_dir")"
+            log_info "Compilando $cname en modo release..."
+            (cd "$crate_dir" && cargo build --release -q) || true
+            if [ -f "$crate_dir/target/release/$cname" ]; then
+                install_item "$crate_dir/target/release/$cname" "$HOME/.local/bin/$cname"
+                chmod +x "$HOME/.local/bin/$cname"
+                log_ok "Binario nativo instalado: $HOME/.local/bin/$cname"
+            fi
+        fi
+    done
+fi
+
 # 6. Recargar systemd de usuario si hay cambios
 if command -v systemctl >/dev/null 2>&1; then
     log_info "Recargando demonio systemd de usuario..."

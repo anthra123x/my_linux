@@ -96,3 +96,4 @@ ok "Perfil energetico sincronizado"
 
 printf '\n\033[1;32mOptimizaciones de kernel y memoria aplicadas exitosamente.\033[0m\n'
 printf 'Respaldo previo guardado en: %s\n' "$BACKUP_DIR"
+

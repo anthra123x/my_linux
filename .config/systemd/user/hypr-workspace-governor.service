@@ -1,16 +1,16 @@
 [Unit]
-Description=Hyprland Workspace Resource Governor (Zero-idle background isolation)
+Description=Hyprland Workspace Resource Governor (Rust Native - Zero-idle background isolation)
 After=graphical-session.target
 PartOf=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=%h/.local/bin/hypr-workspace-governor.py
+ExecStart=%h/.local/bin/hypr-workspace-governor
 Restart=always
 RestartSec=2
-Environment=PYTHONUNBUFFERED=1
 Environment=PATH=/usr/local/bin:/usr/bin:/bin:%h/.local/bin
 Environment=XDG_RUNTIME_DIR=/run/user/%U
 
 [Install]
 WantedBy=graphical-session.target
+

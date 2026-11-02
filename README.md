@@ -50,6 +50,7 @@ Disenado para maxima fluidez a 60 FPS, bajo consumo de recursos y estetica cuida
 | **Monitor de Recursos** | Btop | `.config/btop/` |
 | **Visualizador de Audio**| Cava | `.config/cava/` |
 | **Servicios de Usuario** | Systemd User Units | `.config/systemd/user/` |
+| **Gobernador de Recursos** | Hypr Workspace Governor (Rust) | `crates/hypr-workspace-governor/` |
 | **Scripts de Sistema** | Utilidades propias | `scripts/` |
 
 ---
