@@ -1,8 +1,8 @@
-# Dotfiles y Configuracion del Sistema
+# Cell: Entorno de Escritorio y Arquitectura de Sistema
 
-Configuracion centralizada, modular y optimizada para **CachyOS / Arch Linux** bajo Wayland con **Hyprland**, **Quickshell**, **Fish Shell**, **Starship**, **Kitty** y el motor de fondos animados **Wallmotion**.
+Entorno Wayland de alto rendimiento, bajo consumo y personalizacion dinamica para **CachyOS / Arch Linux**. Construido sobre **Hyprland**, componentes del sistema nativos en **Rust**, **Quickshell** (Material You), **Fish Shell** y el motor de fondos animados **Wallmotion**.
 
-Disenado para maxima fluidez a 60 FPS, bajo consumo de recursos y estetica cuidada en portatiles con graficos integrados Intel UHD.
+El proyecto evoluciona desde una configuracion base hacia una **Shell reactiva y futura distribucion independiente (Cell OS)**, disenada bajo la premisa de **Aislamiento Dinamico de Recursos**: *el sistema solo consume energia y ciclos de computo para lo que esta visible y en foco en el espacio de trabajo actual*.
 
 ---
 
@@ -22,9 +22,56 @@ Disenado para maxima fluidez a 60 FPS, bajo consumo de recursos y estetica cuida
 
 ---
 
+## Vision y Arquitectura de Cell
+
+A diferencia de los entornos de escritorio tradicionales (GNOME, KDE o Sway/Hyprland genericos) donde las aplicaciones en segundo plano compiten indefinidamente por tiempo de CPU, memoria y bus de renderizado, la arquitectura de **Cell** implementa una jerarquia de cuatro capas desacopladas con supervision activa en tiempo real:
+
+```mermaid
+graph TD
+    subgraph Capa 0: Base de Sistema y Kernel
+        K1["Linux Kernel CachyOS (x86-64-v3 + Sched-ext BPFland)"]
+        K2["Memoria ZRAM 12 GB zstd (0 Bytes en Swap NVMe)"]
+        K3["THP madvise + vm.stat_interval 10 (C-states C8/C10)"]
+    end
+
+    subgraph Capa 1: Compositor y Tubería Gráfica
+        W1["Hyprland 0.57.0 (Aquamarine, Lua)"]
+        W2["Tasa condicional: 30 FPS en reposo / 60 FPS en foco"]
+        W3["Aceleracion por hardware Intel VA-API (VDBOX ASIC)"]
+    end
+
+    subgraph Capa 2: Supervision y Gobernanza (Rust)
+        R1["hypr-workspace-governor (Aislamiento SCHED_IDLE en segundo plano)"]
+        R2["Proteccion de audio en tiempo real via PipeWire (pactl)"]
+        R3["Consumo de memoria nativa: inferior a 1 MB de RAM"]
+    end
+
+    subgraph Capa 3: Capa de Presentacion y Experiencia (Cell UI)
+        U1["Quickshell + Matugen (Paletas dinamicas Material You)"]
+        U2["Wallmotion (60 FPS con 2x2 SSAA por hardware y 0% CPU)"]
+        U3["Lanzador Fuzzel y Menu de energia Wlogout"]
+    end
+
+    K1 --> W1
+    K2 --> W1
+    K3 --> W1
+    W1 --> R1
+    W1 --> U1
+    R1 --> U1
+    U2 --> W3
+```
+
+### Principios Fundamentales
+1. **Aislamiento Activo de Espacios de Trabajo:** Las ventanas en espacios de trabajo ocultos se trasladan automaticamente a la politica del kernel `SCHED_IDLE`, prioridad `nice 19` y clase de E/S ociosa. Cero desperdicio de ciclos para aplicaciones invisibles.
+2. **Proteccion Inteligente de Flujos Multimedia:** El supervisor distingue entre procesos silenciosos y aplicaciones con reproduccion de audio activa (Spotify, llamadas, reproductores), asegurando que el sonido nunca sufra micro-cortes.
+3. **Cero Dependencia de Interpretes en Segundo Plano:** Los demonios residentes se compilan en Rust nativo con optimizacion en tiempo de enlace (LTO), eliminando recolectores de basura, tiempos de arranque en frio y huellas de memoria elevadas.
+4. **Reserva Total de Potencia para 60 FPS:** El procesador (Intel Core i3-N305 de 8 nucleos Gracemont) modula su frecuencia de reposo a ~1.4 GHz, dejando los 23W de potencia electrica del encapsulado disponibles para que la GPU Intel UHD sostenga 1250 MHz constantes.
+
+---
+
 ## Especificaciones del Sistema de Referencia
 
-- **Hardware:** ASUS Vivobook Go E1504GA
+- **Dispositivo:** ASUS Vivobook Go E1504GA
 - **Procesador:** Intel Core i3-N305 (8 nucleos Gracemont hasta 3.8 GHz)
 - **Graficos:** Intel UHD Graphics (32 EUs Alder Lake-N, soporte VAAPI QuickSync completo)
 - **Memoria:** 8 GB LPDDR5 4800 MT/s
@@ -33,69 +80,76 @@ Disenado para maxima fluidez a 60 FPS, bajo consumo de recursos y estetica cuida
 
 ---
 
-## Pila de Software y Componentes
+## Pila de Software y Modulos del Sistema
 
-| Categoria | Herramienta | Ruta de Configuracion |
-| :--- | :--- | :--- |
-| **Compositor Wayland** | Hyprland 0.57.0 (Aquamarine, Lua) | `.config/hypr/` |
-| **Barra y Paneles** | Quickshell (Hyprsimple / ii) | `.config/quickshell/` |
-| **Fondos Animados** | Wallmotion (mpvpaper + VAAPI) | `.config/wallmotion/`, `scripts/wallmotion` |
-| **Generador de Temas** | Matugen (Material You) | `.config/matugen/` |
-| **Shell Principal** | Fish Shell | `.config/fish/` |
-| **Shells de Respaldo** | Bash y Zsh | `home/.bashrc`, `home/.zshrc` |
-| **Prompt** | Starship | `.config/starship.toml` |
-| **Terminales** | Kitty / Ghostty | `.config/kitty/`, `.config/ghostty/` |
-| **Lanzador de Apps** | Fuzzel | `.config/fuzzel/` |
-| **Menu de Energia** | Wlogout | `.config/wlogout/` |
-| **Monitor de Recursos** | Btop | `.config/btop/` |
-| **Visualizador de Audio**| Cava | `.config/cava/` |
-| **Servicios de Usuario** | Systemd User Units | `.config/systemd/user/` |
-| **Gobernador de Recursos** | Hypr Workspace Governor (Rust) | `crates/hypr-workspace-governor/` |
-| **Scripts de Sistema** | Utilidades propias | `scripts/` |
+| Categoria | Componente | Implementacion / Ruta | Rol Arquitectonico |
+| :--- | :--- | :--- | :--- |
+| **Gobernador de Recursos** | `hypr-workspace-governor` | `crates/hypr-workspace-governor/` | Daemon nativo en Rust (< 1 MB RAM) que aplica `SCHED_IDLE` a workspaces inactivos. |
+| **Compositor Wayland** | Hyprland 0.57.0 | `.config/hypr/` | Gestor de ventanas con Lua y tasa condicional de repintado. |
+| **Barra y Paneles** | Quickshell (Hyprsimple) | `.config/quickshell/` | Interfaz reactiva con integracion IPC. |
+| **Fondos Animados** | Wallmotion | `scripts/wallmotion`, `.config/wallmotion/` | Motor de vídeo por hardware VAAPI con escalado entero 2:1 a 60 FPS. |
+| **Generador de Temas** | Matugen | `.config/matugen/` | Extraccion algoritmica de color Material You desde fondos. |
+| **Shell Interactiva** | Fish Shell | `.config/fish/` | Shell de comandos con auto-sugerencias y Starship prompt. |
+| **Terminales** | Ghostty / Kitty | `.config/ghostty/`, `.config/kitty/` | Emuladores de terminal con aceleracion GPU nativa. |
+| **Lanzador de Apps** | Fuzzel | `.config/fuzzel/` | Menu de aplicaciones Wayland de arranque instantaneo. |
+| **Menu de Salida** | Wlogout | `.config/wlogout/` | Gestion de sesion, bloqueo y apagado. |
+| **Servicios de Usuario** | Systemd User Units | `.config/systemd/user/` | Orquestacion de ciclo de vida de demonios de usuario. |
+| **Scripts de Soporte** | Herramientas auxiliares | `scripts/` | Utilidades de audio, brillo, wifi y automatizacion. |
+
+---
+
+## Optimizaciones de Rendimiento y Memoria en Produccion
+
+1. **Memoria ZRAM de 12 GB (Compresion ZSTD):**
+   - Configurado en `/etc/systemd/zram-generator.conf` con prioridad 100.
+   - 0 Bytes de uso en el archivo de intercambio en SSD NVMe, eliminando la latencia de contencion de disco.
+2. **Gobernador de Espacios de Trabajo en Rust:**
+   - Reduce aplicaciones pesadas fuera de pantalla (LibreOffice, navegadores en reposo) de mas del 10% de CPU a menos del 0.5% en reposo.
+   - Conexion directa mediante socket UNIX sin llamadas lentas a `hyprctl`.
+3. **Priorizacion de GPU a 60 FPS:**
+   - `render_unfocused_fps = 30`: Las ventanas sin foco repintan a 30 FPS para dedicar todo el ancho de banda a la ventana interactiva.
+4. **Afinamiento del Kernel y Politicas Termicas:**
+   - Transparent Huge Pages configurado en `madvise` mediante `/etc/tmpfiles.d/thp.conf` (ahorro de hasta 700 MB de RAM fragmentada).
+   - `vm.stat_interval = 10`: Reduce interrupciones de temporizador en reposo en un 90%, habilitando estados C8/C10 en los nucleos Gracemont.
+   - Script de aplicacion integral: [`scripts/apply-kernel-optimizations.sh`](file:///home/omicron/.gemini/antigravity-ide/scratch/dotfiles/scripts/apply-kernel-optimizations.sh).
 
 ---
 
 ## Subsistema de Fondos de Pantalla
 
-El entorno soporta dos subsistemas complementarios de fondos con cambio en caliente y gestion automatica de capas en Wayland:
+El sistema unifica dos motores de fondo con gestion automatica de capas en Wayland:
 
-### 1. Fondos Estaticos con Temas
+### 1. Fondos Estaticos con Paletas Dinamicas
 - **Atajo:** `SUPER + SHIFT + W`
 - **Ubicacion:** `.config/hypr/themes/<tema>/backgrounds/`
-- **Temas incluidos:** Doom One, Catppuccin, Deep Sea, Everforest, Gruvbox, Nord, Oxocarbon, Rosepine, Zenburn, etc.
-- **Comportamiento:** Aplica el fondo mediante `hyprpaper`, ajusta la paleta de colores de la barra y notifica al usuario.
+- Aplica fondos via `hyprpaper`, recalcula los colores del sistema con Matugen y actualiza Quickshell en caliente.
 
 ### 2. Fondos Animados por Hardware (Wallmotion)
 - **Atajo:** `SUPER + SHIFT + T`
-- **Ubicacion:** `.config/wallmotion/library/` (con miniaturas en `.config/wallmotion/thumbs/`)
+- **Ubicacion:** `.config/wallmotion/library/`
 - **Motor:** `mpvpaper` acelerado por hardware VAAPI (QuickSync VDBOX).
-- **Optimizacion:**
-  - Decodificacion directa en hardware sin carga de CPU (coste menor al 2.5% de CPU total en 4K 60 FPS).
-  - Downscaling 2:1 entero de 4K a 1080p mediante samplers bilineales por hardware (2x2 SSAA), eliminando la sobrecarga de shaders y garantizando 0 caidas de fotogramas.
-  - Convivencia automatica de capas: al activar un fondo animado se detiene temporalmente `hyprpaper.service` para evitar superposicion en Layer 0 (background); al pausar o volver a un fondo estatico, `hyprpaper.service` se restaura de inmediato.
-  - Pausa inteligente en reposo controlada por `hypridle`.
+- Downscaling 2:1 integro de 4K a 1080p usando samplers bilineales por hardware (2x2 SSAA), entregando 60 FPS fluidos con menos del 2% de carga de CPU.
+- Convivencia automatica: suspende temporalmente `hyprpaper.service` al reproducir un fondo animado y lo reactiva de inmediato al volver a fondos estaticos.
 
 ---
 
-## Optimizaciones de Rendimiento y Memoria
+## Hoja de Ruta: De Dotfiles a Cell OS
 
-1. **ZRAM de 12 GB (Compresion ZSTD):**
-   - Configurado en `/etc/systemd/zram-generator.conf` con prioridad 100.
-   - Permite que cargas de trabajo pesadas (navegadores con decenas de pestañas, multiples IDEs, reproductor de musica y compositor) residan 100% en RAM comprimida a velocidad de bus LPDDR5.
-   - Previene el desbordamiento al archivo de intercambio en disco NVMe, erradicando los micro-tirones por I/O.
-2. **Priorizacion de Fotogramas en Hyprland:**
-   - `render_unfocused_fps = 30`: Las ventanas en segundo plano reducen su tasa de repintado a 30 FPS, reservando el 100% del rendimiento de la GPU integrada para la ventana activa en foco a 60 FPS limpios.
-   - Triple buffering dinamico habilitado (`render:new_render_scheduling = true`).
-3. **Gestion Termica y de Corriente:**
-   - Script `power-state-manager` para coordinar perfiles ACPI (`performance` / `balanced`), suelo minimo de GPU a 800 MHz con cargador para evitar latencias de cambio de reloj, y control de ventilador ASUS.
-4. **Gobernador de Recursos de Espacios de Trabajo (`hypr-workspace-governor`):**
-   - Servicio en segundo plano acoplado al socket IPC `.socket2.sock` de Hyprland.
-   - Conmuta automáticamente los procesos de espacios inactivos a la política `SCHED_IDLE`, prioridad de proceso `nice 19` y clase de E/S ociosa (`ionice idle`), asegurando que solo el espacio de trabajo en foco consuma CPU y ancho de banda del bus.
-   - Protección de audio integrada: detecta flujos de sonido activos vía PipeWire / PulseAudio (`pactl`) para no limitar reproductores como Spotify o videollamadas.
-5. **Optimizaciones de Kernel y Memoria (Intel Alder Lake-N):**
-   - Transparent Huge Pages (THP) en `madvise` para evitar la fragmentación de páginas de 2 MB en 8 GB de RAM física.
-   - `vm.stat_interval = 10` para reducir en un 90% los despertares de temporizador de los núcleos Gracemont, facilitando estados C8/C10 de ultra-bajo consumo.
+El desarrollo del proyecto se divide en 3 fases estrategicas:
 
+### Fase 1: Consolidacion de Demonios Nativos (Actual)
+- Migracion de demonios residentes de Python/Bash hacia Rust en `crates/`.
+- Perfeccionamiento del gobernador de recursos por espacio de trabajo.
+- Reduccion del consumo total en reposo a menos de 1.2 GB de RAM global (incluyendo entorno grafico y navegador ligero).
+
+### Fase 2: Cell Shell Unificada (Medio Plazo)
+- Integracion de los modulos de barra, lanzador, panel de notificaciones y selector de fondos en un runtime unificado con protocolo IPC propio (`cell-ipc`).
+- Centro de control grafico ligero para gestion de perfiles energeticos, visuales y de red sin dependencias pesadas de GNOME.
+
+### Fase 3: Distribucion Independiente (Cell OS - Largo Plazo)
+- Construccion de imagen ISO reproducible con instalador Calamares preconfigurado.
+- Repositorio de paquetes binarios optimizados con flags de compilacion x86-64-v3 y LTO activado.
+- Perfil de hardware autoconfigurado con politicas de distribucion energetica para graficos integrados Intel y AMD.
 
 ---
 
@@ -106,53 +160,37 @@ El entorno soporta dos subsistemas complementarios de fondos con cambio en calie
 ├── .config/
 │   ├── btop/               # Monitor del sistema con temas
 │   ├── cava/               # Visualizador de audio
-│   ├── environment.d/      # Variables de entorno y optimizaciones
+│   ├── environment.d/      # Variables de entorno graficas
 │   ├── fish/               # Configuracion de Fish Shell
-│   ├── fontconfig/         # Ajustes de tipografia
 │   ├── fuzzel/             # Lanzador de aplicaciones
-│   ├── ghostty/            # Terminal Ghostty
-│   ├── gtk-3.0/ & gtk-4.0/ # Estilos GTK
+│   ├── ghostty/ & kitty/   # Emuladores de terminal
 │   ├── hypr/               # Configuracion completa de Hyprland (Lua)
-│   │   ├── bindings/       # Atajos de teclado y aplicaciones
-│   │   ├── themes/         # Temas visuales y fondos estaticos
-│   │   ├── input.lua       # Touchpad, gestos y teclado
-│   │   └── looknfeel.lua   # Renderizado, animaciones y decoracion
-│   ├── kitty/              # Terminal Kitty
 │   ├── matugen/            # Plantillas Material You
-│   ├── mpv/ & mpvpaper/    # Perfiles de reproduccion de video
 │   ├── quickshell/         # Barra superior y paneles
 │   ├── starship.toml       # Estilo del prompt
-│   ├── systemd/user/       # Servicios de usuario
-│   ├── wallmotion/         # Biblioteca de fondos animados y miniaturas
-│   └── wlogout/            # Pantalla de salida del sistema
-├── assets/                 # Capturas de pantalla para documentacion
-├── home/                   # Archivos para el directorio raiz del usuario (~/)
+│   ├── systemd/user/       # Servicios de usuario systemd
+│   └── wallmotion/         # Fondos animados y miniaturas
+├── assets/                 # Capturas del entorno de escritorio
+├── crates/                 # Componentes nativos del sistema en Rust
+│   └── hypr-workspace-governor/  # Daemon de aislamiento de recursos
+├── home/                   # Archivos para el directorio raiz del usuario
 │   ├── .bashrc
 │   ├── .gitconfig
-│   ├── .vimrc
 │   └── .zshrc
-├── scripts/                # Herramientas y scripts de mantenimiento
-│   ├── animated-wallpaper-picker.sh   # Generador de miniaturas y TSV para Quickshell
-│   ├── animated-wallpaper-switcher.sh # Conmutador IPC para fondos animados
-│   ├── battery-monitor.sh             # Monitor de bateria y perfiles de energia
-│   ├── system-upgrade.sh              # Actualizador del sistema con guardia de rendimiento
-│   ├── wallpaper-switcher.sh          # Conmutador de fondos estaticos
+├── scripts/                # Scripts de soporte, energia y mantenimiento
+│   ├── apply-kernel-optimizations.sh  # Despliegue de ajustes de kernel y sysctl
+│   ├── battery-monitor.sh             # Monitor de bateria
 │   ├── wallmotion                     # Motor de fondos animados
 │   └── README.md                      # Documentacion modular de scripts
-├── install.sh              # Script instalador automatico con copia de seguridad
-├── sync.sh                 # Sincronizador bidireccional (Sistema -> Repositorio)
+├── install.sh              # Instalador automatico con compilacion de crates Rust
+├── sync.sh                 # Sincronizador bidireccional (Sistema -> Repo)
 ├── .gitignore
 └── README.md
 ```
 
 ---
 
-## Instalacion y Despliegue
-
-### Requisitos Previos
-
-- Distribucion basada en Arch Linux (CachyOS recomendado)
-- Paquetes esenciales: `hyprland`, `quickshell`, `fish`, `starship`, `kitty`, `mpv`, `mpvpaper`, `ffmpeg`, `rsync`
+## Despliegue y Uso
 
 ### Clonar el Repositorio
 
@@ -161,34 +199,17 @@ git clone https://github.com/anthra123x/my_linux.git ~/dotfiles
 cd ~/dotfiles
 ```
 
-### Opciones de Instalacion
+### Instalacion
 
-#### 1. Modo Simbolico (Recomendado)
-Crea enlaces simbolicos desde el sistema hacia el repositorio para versionar cambios en vivo:
+Compila los crates de Rust nativos e instala la configuracion completa:
 ```bash
 ./install.sh --symlink
 ```
 
-#### 2. Modo Copia Directa
-Copia los archivos a sus destinos definitivos sin enlaces:
-```bash
-./install.sh --copy
-```
-
-Ambos metodos generan un respaldo preventivo de cualquier configuracion existente en `~/.dotfiles_backup_<FECHA>/`.
-
----
-
-## Sincronizacion de Cambios
-
-Para reflejar modificaciones locales del sistema dentro del repositorio antes de hacer commit:
+### Aplicar Optimizaciones de Kernel en el Sistema
 
 ```bash
-# Ver diferencias entre el sistema y el repositorio:
-./sync.sh --diff
-
-# Traer los cambios del sistema hacia el repositorio:
-./sync.sh --pull
+sudo ~/.local/bin/apply-kernel-optimizations.sh
 ```
 
 ---

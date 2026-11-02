@@ -58,3 +58,4 @@ cargo build --release
 # Consultar estado del servicio de usuario
 systemctl --user status hypr-workspace-governor.service
 ```
+
