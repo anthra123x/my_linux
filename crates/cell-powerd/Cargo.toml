@@ -1,0 +1,16 @@
+[package]
+name = "cell-powerd"
+version = "0.1.0"
+edition = "2021"
+authors = ["anthra123x"]
+description = "Daemon nativo en Rust para monitorización de batería y gestión energética de Cell OS"
+
+[dependencies]
+libc = "0.2"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

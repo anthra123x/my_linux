@@ -85,6 +85,7 @@ graph TD
 | Categoria | Componente | Implementacion / Ruta | Rol Arquitectonico |
 | :--- | :--- | :--- | :--- |
 | **Gobernador de Recursos** | `hypr-workspace-governor` | `crates/hypr-workspace-governor/` | Daemon nativo en Rust (< 1 MB RAM) que aplica `SCHED_IDLE` a workspaces inactivos. |
+| **Gestion Energetica** | `cell-powerd` | `crates/cell-powerd/` | Daemon nativo en Rust (~500 KB RAM) de lectura directa en sysfs para perfiles y bateria. |
 | **Compositor Wayland** | Hyprland 0.57.0 | `.config/hypr/` | Gestor de ventanas con Lua y tasa condicional de repintado. |
 | **Barra y Paneles** | Quickshell (Hyprsimple) | `.config/quickshell/` | Interfaz reactiva con integracion IPC. |
 | **Fondos Animados** | Wallmotion | `scripts/wallmotion`, `.config/wallmotion/` | Motor de vídeo por hardware VAAPI con escalado entero 2:1 a 60 FPS. |
