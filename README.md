@@ -46,25 +46,25 @@ A diferencia de los entornos de escritorio tradicionales (GNOME, KDE o Sway/Hypr
 
 ```mermaid
 graph TD
-    subgraph Capa 0: Base de Sistema y Kernel
+    subgraph C0 ["Capa 0: Base de Sistema y Kernel"]
         K1["Linux Kernel CachyOS (x86-64-v3 + Sched-ext BPFland)"]
         K2["Memoria ZRAM 12 GB zstd (0 Bytes en Swap NVMe)"]
         K3["THP madvise + vm.stat_interval 10 (C-states C8/C10)"]
     end
 
-    subgraph Capa 1: Compositor y Tuberia Grafica
+    subgraph C1 ["Capa 1: Compositor y Tuberia Grafica"]
         W1["Hyprland 0.57.0 (Aquamarine, Lua)"]
         W2["Tasa fija a 60 FPS sin tirones entre workspaces"]
         W3["Aceleracion por hardware Intel VA-API (VDBOX ASIC)"]
     end
 
-    subgraph Capa 2: Supervision y Gobernanza (Rust)
+    subgraph C2 ["Capa 2: Supervision y Gobernanza (Rust)"]
         R1["hypr-workspace-governor (Priorizacion balanceada nice 5 / nice 0)"]
         R2["Proteccion de audio en tiempo real via PipeWire (pactl cache)"]
         R3["Consumo de memoria nativa: inferior a 1.4 MB de RAM"]
     end
 
-    subgraph Capa 3: Capa de Presentacion y Experiencia (Omicron UI)
+    subgraph C3 ["Capa 3: Capa de Presentacion y Experiencia (Omicron UI)"]
         U1["Quickshell + Matugen (Paletas dinamicas Material You)"]
         U2["Wallmotion (Reemplazo atomico via IPC mpvpaper a 60 FPS)"]
         U3["Lanzador Fuzzel y Menu de energia Wlogout"]
@@ -80,7 +80,7 @@ graph TD
 ```
 
 ### Principios Fundamentales
-1. **Aislamiento Activo de Espacios de Trabajo:** Las ventanas en espacios de trabajo ocultos se trasladan automaticamente a la politica del kernel `SCHED_IDLE`, prioridad `nice 19` y clase de E/S ociosa. Cero desperdicio de ciclos para aplicaciones invisibles.
+1. **Aislamiento Activo de Espacios de Trabajo:** Las ventanas en espacios de trabajo ocultos se trasladan automaticamente a la politica del kernel `SCHED_OTHER` con prioridad adaptativa `nice 5` y clase de E/S balanceada. El espacio activo recibe el 100% de prioridad interactiva (`nice 0`), eliminando contencion sin provocar inanicion de sockets Wayland.
 2. **Proteccion Inteligente de Flujos Multimedia:** El supervisor distingue entre procesos silenciosos y aplicaciones con reproduccion de audio activa (Spotify, llamadas, reproductores), asegurando que el sonido nunca sufra micro-cortes.
 3. **Cero Dependencia de Interpretes en Segundo Plano:** Los demonios residentes se compilan en Rust nativo con optimizacion en tiempo de enlace (LTO), eliminando recolectores de basura, tiempos de arranque en frio y huellas de memoria elevadas.
 4. **Reserva Total de Potencia para 60 FPS:** El procesador (Intel Core i3-N305 de 8 nucleos Gracemont) modula su frecuencia de reposo a ~1.4 GHz, dejando los 23W de potencia electrica del encapsulado disponibles para que la GPU Intel UHD sostenga 1250 MHz constantes.
