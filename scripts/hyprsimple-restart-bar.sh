@@ -36,16 +36,6 @@ case "${1:-}" in
     ;;
 esac
 
-if systemctl --user is-active quickshell.service >/dev/null 2>&1; then
-  systemctl --user restart quickshell.service
-  exit 0
-fi
-
-if systemctl --user is-active quickshell.service >/dev/null 2>&1; then
-  systemctl --user restart quickshell.service
-  exit 0
-fi
-
 # The old bar is asked to quit, and signalled only if it does not.
 #
 # Quickshell does not take its child processes down when a signal ends it. The
