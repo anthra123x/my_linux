@@ -1,22 +1,23 @@
-# hypr-workspace-governor (v3.0 - Linux Cgroup v2 & Adaptive Scheduler)
+# hypr-workspace-governor (v3.1 - Linux Cgroup v2 & Multi-Project Adaptive Scheduler)
 
-Gobernador de recursos nativo en Rust para el compositor Wayland Hyprland y la shell Omicron.
-Garantiza aislamiento estricto de CPU mediante controladores de cgroup v2 (`cpu.max` y `cpu.weight`) combinados con politicas de prioridad interactiva (`nice` e `ioprio`), asegurando que las aplicaciones en segundo plano no saturen los 8 nucleos Gracemont ni causen micro-tirones por contencion de memoria y cache.
+Gobernador de recursos nativo en Rust para el compositor Wayland Hyprland y Omicron DE.
+Garantiza aislamiento estricto de CPU mediante controladores de cgroup v2 (`cpu.max` y `cpu.weight`) combinados con politicas de prioridad interactiva (`nice` e `ioprio`), asegurando que las aplicaciones en segundo plano y las instancias inactivas de IDEs no saturen los 8 nucleos Gracemont ni compitan por memoria y cache.
 
 ---
 
 ## 1. Proposito y Alcance
 - Escuchar eventos de cambio de espacio de trabajo y ventanas desde el socket IPC de Hyprland (`.socket2.sock`).
-- Priorizar el espacio de trabajo activo de forma completa (`cpu.max: max 100000`, `cpu.weight: 1000`, `nice 0`, `ioprio BE 0`).
-- Aislar ventanas inactivas limitando su cuota maxima de CPU (`cpu.max: 30000 100000` = maximo 30% de un solo nucleo) y peso minimo (`cpu.weight: 1`, `nice 10`, `ioprio BE 6`), manteniendo los 7 nucleos restantes en reposo termico y frecuencia baja.
-- Proteccion inteligente de audio (Spotify, llamadas): preserva hasta un 60% de margen de un nucleo (`cpu.max: 60000 100000`, `cpu.weight: 100`, `nice 0`, `ioprio BE 2`), evitando cortes de sonido sin permitir que los renderizadores CEF/Chromium malgasten GPU y ciclos.
-- Supervision de Wallmotion (`mpvpaper`): asigna prioridad subordinada (`nice 10`, `ioprio BE 6`) para reproduccion fluida en hardware sin interferir con la entrada de teclado o raton.
-- Delegacion automatica de cgroup v2 en `app.slice` y `app-graphical.slice` activando `+cpu` de forma no invasiva.
+- Priorizar el espacio de trabajo y ventana activa de forma completa (`cpu.max: max 100000`, `cpu.weight: 1000`, `nice 0`, `ioprio BE 0`).
+- Aislar ventanas inactivas limitando su cuota maxima de CPU (`cpu.max: 30000 100000` = maximo 30% de un solo nucleo) y peso minimo (`cpu.weight: 1`, `nice 10`, `ioprio BE 6`).
+- Gobernanza multi-proyecto para Antigravity IDE: mapea procesos `agy --hub`, NodeServices y workers a su carpeta de proyecto; traslada proyectos inactivos al cgroup dedicado `app-background.scope` (`cpu.max: 15000 100000` = 15% de 1 núcleo) con `nice 15` e `ioprio BE 7`.
+- Proteccion inteligente de audio (Spotify, llamadas): preserva hasta un 60% de margen de un nucleo (`cpu.max: 60000 100000`, `cpu.weight: 100`, `nice 0`, `ioprio BE 2`), evitando cortes de sonido.
+- Supervision de Wallmotion (`mpvpaper`): asigna prioridad subordinada (`nice 10`, `ioprio BE 6`) para reproduccion fluida en hardware.
+- Delegacion automatica de cgroup v2 en `app.slice`, `app-graphical.slice` y creacion dinamica de `app-background.scope`.
 
 ---
 
 ## 2. Contratos
-- **Entrada:** Eventos IPC de Hyprland (`workspace>>`, `focusedmon>>`, `openwindow>>`, `closewindow>>`).
+- **Entrada:** Eventos IPC de Hyprland (`workspace>>`, `focusedmon>>`, `openwindow>>`, `closewindow>>`, `activewindow>>`, `activewindowv2>>`).
 - **Salida / Efectos de Sistema:**
   - Escritura atomica en `/sys/fs/cgroup/.../cpu.max` y `/sys/fs/cgroup/.../cpu.weight`.
   - Syscall `sched_setscheduler(pid, SCHED_OTHER, &param)`

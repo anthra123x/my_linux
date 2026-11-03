@@ -41,3 +41,4 @@ else
     systemctl --user start hyprpaper.service >/dev/null 2>&1 || true
   fi
 fi
+

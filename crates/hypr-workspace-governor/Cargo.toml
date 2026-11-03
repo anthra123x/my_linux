@@ -1,9 +1,9 @@
 [package]
 name = "hypr-workspace-governor"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 authors = ["anthra123x"]
-description = "Gobernador nativo en Rust para aislamiento y ahorro de recursos por espacio de trabajo en Hyprland"
+description = "Gobernador nativo en Rust v3.1 con aislamiento de recursos multi-proyecto y cgroups v2 para Omicron DE"
 
 [dependencies]
 libc = "0.2"

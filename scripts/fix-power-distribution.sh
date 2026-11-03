@@ -113,31 +113,31 @@ apply_ac() {
   powerprofilesctl set performance >/dev/null 2>&1 || true
   echo performance >/sys/firmware/acpi/platform_profile 2>/dev/null || true
 
-  # 2. Ventilador ASUS en Overboost (1) para refrigeración activa previa
+  # 2. Ventilador ASUS en modo estándar/equilibrado (0)
   if [ -w /sys/devices/platform/asus-nb-wmi/throttle_thermal_policy ]; then
-    echo 1 >/sys/devices/platform/asus-nb-wmi/throttle_thermal_policy 2>/dev/null || true
+    echo 0 >/sys/devices/platform/asus-nb-wmi/throttle_thermal_policy 2>/dev/null || true
   fi
 
-  # 3. CPU: Turbo 100% activo (hasta 3.8 GHz) con EPP performance y piso al 45% (~1.8-2.0 GHz)
+  # 3. CPU: Turbo 100% activo (hasta 3.8 GHz) con EPP balance_performance y piso al 25% (~1.4 GHz)
   # Brinda reactividad instantanea en multitarea sin latencia de escalado.
   echo 0 >/sys/devices/system/cpu/intel_pstate/no_turbo 2>/dev/null || true
-  echo 45 >/sys/devices/system/cpu/intel_pstate/min_perf_pct 2>/dev/null || true
+  echo 25 >/sys/devices/system/cpu/intel_pstate/min_perf_pct 2>/dev/null || true
   echo 100 >/sys/devices/system/cpu/intel_pstate/max_perf_pct 2>/dev/null || true
 
   for f in /sys/devices/system/cpu/cpufreq/policy*/energy_performance_preference; do
-    [ -w "$f" ] && echo performance >"$f" 2>/dev/null || true
+    [ -w "$f" ] && echo balance_performance >"$f" 2>/dev/null || true
   done
 
-  # 4. GPU: Fijar piso mínimo en 800 MHz y boost en 1250 MHz para composicion Wayland y multitarea fluida
+  # 4. GPU: Suelo dinámico en 200 MHz (RPn) y boost en 1250 MHz para reposo frío y aceleración fluida
   for card in /sys/class/drm/card[0-9]*; do
     [ -d "$card" ] || continue
-    [ -w "$card/gt_min_freq_mhz" ] && echo 800 >"$card/gt_min_freq_mhz" 2>/dev/null || true
+    [ -w "$card/gt_min_freq_mhz" ] && echo 200 >"$card/gt_min_freq_mhz" 2>/dev/null || true
     [ -w "$card/gt_boost_freq_mhz" ] && echo 1250 >"$card/gt_boost_freq_mhz" 2>/dev/null || true
   done
 
   echo ac >"$DESIRED_FILE"
   echo 0 >"$STATE_DIR/hot_count" 2>/dev/null || true
-  log "estado=AC perfil=performance epp=performance gpu_min=800 gpu_boost=1250 asus_fan=overboost"
+  log "estado=AC perfil=performance epp=balance_performance gpu_min=200 gpu_boost=1250 asus_fan=standard"
 }
 
 apply_battery() {

@@ -1,22 +1,20 @@
-//! hypr-workspace-governor (Rust v3.0 - Linux Cgroup v2 & Adaptive Scheduler Engine)
+//! hypr-workspace-governor (Rust v3.1 - Linux Cgroup v2 & Multi-Project Adaptive Scheduler)
 //!
-//! Gobernador de recursos nativo en Rust para Hyprland (Omicron Shell).
+//! Gobernador de recursos nativo en Rust para Hyprland (Omicron DE).
 //! Implementa Aislamiento Activo de Recursos mediante controladores de cgroup v2
 //! del kernel Linux (cpu.max y cpu.weight) combinados con politicas de prioridad
 //! interactiva (nice e ioprio).
 //!
-//! Caracteristicas v3.0:
-//! - Aislamiento estricto via Linux Cgroup v2: limita fisicamente la cuota de CPU
-//!   (cpu.max) de las aplicaciones en segundo plano para evitar que despierten los
-//!   8 nucleos Gracemont a 3 GHz, protegiendo el bus de memoria LPDDR5 y la cache L3.
-//! - Cuota garantizada para el workspace activo: cpu.max sin limite (max 100000) y
-//!   cpu.weight de 1000 con nice 0 para respuesta interactiva instantanea a 60 FPS.
-//! - Proteccion inteligente de audio (PipeWire): preserva un 60% de margen de un nucleo
-//!   para reproductores activos (Spotify, llamadas) congelando su renderizado pesado de UI.
-//! - Gobernanza de fondos animados (Wallmotion): asigna prioridad subordinada a mpvpaper
-//!   para garantizar decodificacion por hardware continua sin disputar ciclos con el usuario.
-//! - Auto-habilitacion transparente de delegacion cgroup v2 en app.slice y app-graphical.slice.
-//! - Restauracion atomica al detener el servicio.
+//! Novedades v3.1:
+//! - Gobernanza Multi-Proyecto para Antigravity IDE:
+//!   Mapea los arboles de extensiones (NodeService), hubs de agentes (agy) y workers
+//!   a su directorio de trabajo (--add-dir) y ventana de Hyprland.
+//! - Aislamiento en cgroup v2 dedicado (app-background.scope):
+//!   Limita fisicamente al 15% de 1 nucleo (cpu.max = 15000 100000) los hubs y
+//!   renderers de proyectos en segundo plano, impidiendo que saturen los 8 nucleos
+//!   Gracemont o interfieran entre sesiones activas.
+//! - Reactivacion atomica en < 10 ms al cambiar de ventana o espacio de trabajo.
+//! - Proteccion de audio PipeWire y fondos animados con aceleracion por hardware.
 
 use libc::{c_int, c_long, id_t, PRIO_PROCESS, SCHED_OTHER};
 use serde::Deserialize;
@@ -79,6 +77,16 @@ struct Client {
     workspace: WorkspaceRef,
     #[serde(default)]
     class: String,
+    #[serde(default)]
+    title: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ActiveWindow {
+    #[serde(default)]
+    class: String,
+    #[serde(default)]
+    title: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -98,6 +106,12 @@ struct WallmotionPidFile {
     pids: Vec<i32>,
 }
 
+struct HubProcess {
+    pid: i32,
+    ppid: i32,
+    project_folder: String,
+}
+
 unsafe fn set_ioprio(pid: i32, ioclass: c_int, iodata: c_int) {
     let prio = (ioclass << 13) | (iodata & 0x1FFF);
     libc::syscall(SYS_IOPRIO_SET, IOPRIO_WHO_PROCESS, pid, prio);
@@ -112,12 +126,37 @@ unsafe fn set_nice(pid: i32, nice: c_int) {
     libc::setpriority(PRIO_PROCESS, pid as id_t, nice);
 }
 
+fn get_user_background_cgroup() -> PathBuf {
+    let uid = unsafe { libc::getuid() };
+    PathBuf::from(format!(
+        "/sys/fs/cgroup/user.slice/user-{}.slice/user@{}.service/app-background.scope",
+        uid, uid
+    ))
+}
+
+fn get_user_app_cgroup() -> PathBuf {
+    let uid = unsafe { libc::getuid() };
+    PathBuf::from(format!(
+        "/sys/fs/cgroup/user.slice/user-{}.slice/user@{}.service/app.slice",
+        uid, uid
+    ))
+}
+
 fn ensure_cgroup_cpu_controller() {
     let uid = unsafe { libc::getuid() };
     let targets = [
-        format!("/sys/fs/cgroup/user.slice/user-{}.slice/user@{}.service/cgroup.subtree_control", uid, uid),
-        format!("/sys/fs/cgroup/user.slice/user-{}.slice/user@{}.service/app.slice/cgroup.subtree_control", uid, uid),
-        format!("/sys/fs/cgroup/user.slice/user-{}.slice/user@{}.service/app.slice/app-graphical.slice/cgroup.subtree_control", uid, uid),
+        format!(
+            "/sys/fs/cgroup/user.slice/user-{}.slice/user@{}.service/cgroup.subtree_control",
+            uid, uid
+        ),
+        format!(
+            "/sys/fs/cgroup/user.slice/user-{}.slice/user@{}.service/app.slice/cgroup.subtree_control",
+            uid, uid
+        ),
+        format!(
+            "/sys/fs/cgroup/user.slice/user-{}.slice/user@{}.service/app.slice/app-graphical.slice/cgroup.subtree_control",
+            uid, uid
+        ),
     ];
 
     for t in &targets {
@@ -158,14 +197,84 @@ fn set_cgroup_limits(cg: &Path, cpu_max: &str, cpu_weight: &str) {
     }
 }
 
+fn extract_project_name(title: &str) -> Option<String> {
+    if let Some(pos) = title.find(" - Antigravity IDE") {
+        let name = title[..pos].trim();
+        if !name.is_empty() {
+            return Some(name.to_string());
+        }
+    }
+    None
+}
+
+fn scan_antigravity_hubs() -> Vec<HubProcess> {
+    let mut hubs = Vec::new();
+    let proc_dir = Path::new("/proc");
+    let entries = match fs::read_dir(proc_dir) {
+        Ok(e) => e,
+        Err(_) => return hubs,
+    };
+
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if let Ok(pid) = name_str.parse::<i32>() {
+            let cmd_file = entry.path().join("cmdline");
+            if let Ok(bytes) = fs::read(&cmd_file) {
+                let cmd = String::from_utf8_lossy(&bytes);
+                if cmd.contains("agy") && cmd.contains("--add-dir=") {
+                    let mut folder_opt = None;
+                    for arg in cmd.split('\0') {
+                        if let Some(dir) = arg.strip_prefix("--add-dir=") {
+                            let p = Path::new(dir.trim_end_matches('/'));
+                            if let Some(fname) = p.file_name() {
+                                folder_opt = Some(fname.to_string_lossy().to_string());
+                                break;
+                            }
+                        }
+                    }
+                    if let Some(folder) = folder_opt {
+                        let stat_file = entry.path().join("stat");
+                        let ppid = if let Ok(contents) = fs::read_to_string(stat_file) {
+                            if let Some(rparen) = contents.rfind(')') {
+                                let rest = &contents[rparen + 2..];
+                                let parts: Vec<&str> = rest.split_whitespace().collect();
+                                parts
+                                    .get(1)
+                                    .and_then(|s| s.parse::<i32>().ok())
+                                    .unwrap_or(0)
+                            } else {
+                                0
+                            }
+                        } else {
+                            0
+                        };
+                        hubs.push(HubProcess {
+                            pid,
+                            ppid,
+                            project_folder: folder,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    hubs
+}
+
 fn restore_all_pids() {
     if let Ok(mut guard) = MANAGED_PIDS.lock() {
         if let Some(ref pids) = *guard {
+            let app_cg = get_user_app_cgroup();
+            let app_procs = app_cg.join("cgroup.procs");
             for &pid in pids {
-                unsafe {
-                    set_policy(pid, SCHED_OTHER);
-                    set_nice(pid, 0);
-                    set_ioprio(pid, IOPRIO_CLASS_BE, 0);
+                if pid > 1 {
+                    let _ = fs::write(&app_procs, format!("{}\n", pid));
+                    unsafe {
+                        set_policy(pid, SCHED_OTHER);
+                        set_nice(pid, 0);
+                        set_ioprio(pid, IOPRIO_CLASS_BE, 0);
+                    }
                 }
             }
         }
@@ -180,6 +289,11 @@ fn restore_all_pids() {
         }
         *guard = None;
     }
+
+    let bg_cg = get_user_background_cgroup();
+    if bg_cg.exists() {
+        set_cgroup_limits(&bg_cg, "max 100000\n", "100\n");
+    }
 }
 
 extern "C" fn sig_handler(_: c_int) {
@@ -187,7 +301,8 @@ extern "C" fn sig_handler(_: c_int) {
 }
 
 fn find_hypr_socket_dir() -> Option<PathBuf> {
-    let xdg = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| format!("/run/user/{}", unsafe { libc::getuid() }));
+    let xdg = std::env::var("XDG_RUNTIME_DIR")
+        .unwrap_or_else(|_| format!("/run/user/{}", unsafe { libc::getuid() }));
     let base = Path::new(&xdg).join("hypr");
     if let Ok(entries) = fs::read_dir(&base) {
         for entry in entries.flatten() {
@@ -209,8 +324,12 @@ fn find_hypr_socket_dir() -> Option<PathBuf> {
 fn query_hypr_command(dir: &Path, cmd: &str) -> Option<String> {
     let sock_path = dir.join(".socket.sock");
     let mut stream = UnixStream::connect(sock_path).ok()?;
-    stream.set_read_timeout(Some(Duration::from_millis(200))).ok()?;
-    stream.set_write_timeout(Some(Duration::from_millis(200))).ok()?;
+    stream
+        .set_read_timeout(Some(Duration::from_millis(200)))
+        .ok()?;
+    stream
+        .set_write_timeout(Some(Duration::from_millis(200)))
+        .ok()?;
     stream.write_all(cmd.as_bytes()).ok()?;
 
     let mut buf = Vec::new();
@@ -366,6 +485,38 @@ fn apply_governor(dir: &Path, verbose: bool) {
     let ws_changed = *last_ws_guard != active_ws.id;
     *last_ws_guard = active_ws.id;
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // 1. Mapeo de Proyectos de Antigravity IDE (Multi-Workspace Isolation)
+    // ─────────────────────────────────────────────────────────────────────────
+    let mut active_projects = HashSet::new();
+    let mut inactive_projects = HashSet::new();
+
+    if let Some(act_win_json) = query_hypr_command(dir, "j/activewindow") {
+        if let Ok(act_win) = serde_json::from_str::<ActiveWindow>(&act_win_json) {
+            if act_win.class.contains("antigravity") {
+                if let Some(proj) = extract_project_name(&act_win.title) {
+                    active_projects.insert(proj);
+                }
+            }
+        }
+    }
+
+    for c in &clients {
+        if c.class.contains("antigravity") {
+            if let Some(proj) = extract_project_name(&c.title) {
+                if c.workspace.id == active_ws.id {
+                    active_projects.insert(proj);
+                } else {
+                    inactive_projects.insert(proj);
+                }
+            }
+        }
+    }
+
+    for p in &active_projects {
+        inactive_projects.remove(p);
+    }
+
     let mut all_client_roots = HashSet::new();
     let mut active_roots = HashSet::new();
     let mut inactive_roots = HashSet::new();
@@ -402,7 +553,6 @@ fn apply_governor(dir: &Path, verbose: bool) {
         }
     }
 
-    // Regla de precedencia: si una aplicacion (o cgroup) tiene ventanas activas, gana el activo
     for cg in &active_cgroups {
         inactive_cgroups.remove(cg);
     }
@@ -419,42 +569,105 @@ fn apply_governor(dir: &Path, verbose: bool) {
     }
 
     let proc_tree = get_cached_process_tree(&all_client_roots);
-    let active_all = expand_process_children(&active_roots, &proc_tree);
+    let mut active_all = expand_process_children(&active_roots, &proc_tree);
     let mut inactive_all = expand_process_children(&inactive_roots, &proc_tree);
 
     for p in &active_all {
         inactive_all.remove(p);
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // 2. Localización y Gobernanza de Hubs de Agentes y Extensiones
+    // ─────────────────────────────────────────────────────────────────────────
+    let hubs = scan_antigravity_hubs();
+    let mut proj_active_roots = HashSet::new();
+    let mut proj_inactive_roots = HashSet::new();
+
+    for hub in hubs {
+        let is_active = active_projects.iter().any(|p| {
+            p == &hub.project_folder
+                || hub.project_folder.contains(p)
+                || p.contains(&hub.project_folder)
+        });
+
+        if is_active {
+            proj_active_roots.insert(hub.pid);
+            if hub.ppid > 1 {
+                proj_active_roots.insert(hub.ppid);
+            }
+        } else {
+            proj_inactive_roots.insert(hub.pid);
+            if hub.ppid > 1 {
+                proj_inactive_roots.insert(hub.ppid);
+            }
+        }
+    }
+
+    for p in &proj_active_roots {
+        proj_inactive_roots.remove(p);
+    }
+
+    let proj_active_all = expand_process_children(&proj_active_roots, &proc_tree);
+    let mut proj_inactive_all = expand_process_children(&proj_inactive_roots, &proc_tree);
+    for p in &proj_active_all {
+        proj_inactive_all.remove(p);
+    }
+
+    // Transferir PIDs de proyectos inactivos fuera de active_all
+    for p in &proj_inactive_all {
+        active_all.remove(p);
+        inactive_all.insert(*p);
+    }
+    for p in &proj_active_all {
+        inactive_all.remove(p);
+        active_all.insert(*p);
+    }
+
     let audio_all = expand_process_children(&audio_roots, &proc_tree);
     let heavy_all = expand_process_children(&heavy_compute_roots, &proc_tree);
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Control de Cgroups v2 (Nivel Kernel)
+    // 3. Control de Cgroups v2 (Nivel Kernel)
     // ─────────────────────────────────────────────────────────────────────────
     let mut current_cgroups = HashSet::new();
 
-    // 1. Cgroups activos: cuota completa (max 100000) y peso interactivo maximo
+    // Cgroups de aplicaciones en primer plano (max 100000)
     for cg in &active_cgroups {
         current_cgroups.insert(cg.clone());
         set_cgroup_limits(cg, "max 100000\n", "1000\n");
     }
 
-    // 2. Cgroups inactivos: aislamiento de cuota de CPU estricto
+    // Cgroups de aplicaciones en segundo plano
     for cg in &inactive_cgroups {
         current_cgroups.insert(cg.clone());
         if audio_cgroups.contains(cg) {
-            // Audio en segundo plano (Spotify): max 60% de 1 nucleo para reproduccion limpia
-            // impidiendo que la UI/GPU de Chromium sature los 8 nucleos
             set_cgroup_limits(cg, "60000 100000\n", "100\n");
         } else if heavy_cgroups.contains(cg) {
-            // Computo pesado aislado (exportacion de documentos, compilacion libreoffice): max 20%
             set_cgroup_limits(cg, "20000 100000\n", "1\n");
         } else {
-            // Aplicaciones de escritorio en segundo plano (Brave, ventanas inactivas de IDE):
-            // Cuota dura al 30% de 1 nucleo y peso minimo. Impide el consumo parasito
-            // de bucles de JS (WhatsApp) y mantiene los demas 7 nucleos en reposo absoluto.
             set_cgroup_limits(cg, "30000 100000\n", "1\n");
+        }
+    }
+
+    // Cgroup dedicado para background isolation de proyectos inactivos
+    let bg_cg = get_user_background_cgroup();
+    let app_cg = get_user_app_cgroup();
+    if !bg_cg.exists() {
+        let _ = fs::create_dir_all(&bg_cg);
+    }
+    set_cgroup_limits(&bg_cg, "15000 100000\n", "1\n");
+
+    let bg_procs_file = bg_cg.join("cgroup.procs");
+    let app_procs_file = app_cg.join("cgroup.procs");
+
+    for &pid in &proj_inactive_all {
+        if pid > 1 {
+            let _ = fs::write(&bg_procs_file, format!("{}\n", pid));
+        }
+    }
+    for &pid in &proj_active_all {
+        if pid > 1 {
+            let _ = fs::write(&app_procs_file, format!("{}\n", pid));
         }
     }
 
@@ -463,7 +676,7 @@ fn apply_governor(dir: &Path, verbose: bool) {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Control de Planificacion de Procesos (Nice / I/O Priority)
+    // 4. Control de Planificacion de Procesos (Nice / I/O Priority)
     // ─────────────────────────────────────────────────────────────────────────
     let mut current_managed = HashSet::new();
     let mut states_guard = PID_STATES.lock().unwrap();
@@ -497,10 +710,11 @@ fn apply_governor(dir: &Path, verbose: bool) {
         current_managed.insert(pid);
         let has_audio = audio_all.contains(&pid);
         let is_heavy = heavy_all.contains(&pid);
+        let is_proj_bg = proj_inactive_all.contains(&pid);
 
         let target_state = if has_audio {
             STATE_AUDIO_PROTECTED
-        } else if is_heavy {
+        } else if is_heavy || is_proj_bg {
             STATE_HEAVY
         } else {
             STATE_INACTIVE
@@ -514,7 +728,7 @@ fn apply_governor(dir: &Path, verbose: bool) {
                     set_nice(pid, 0);
                     set_ioprio(pid, IOPRIO_CLASS_BE, 2);
                     protected += 1;
-                } else if is_heavy {
+                } else if is_heavy || is_proj_bg {
                     set_policy(pid, SCHED_OTHER);
                     set_nice(pid, 15);
                     set_ioprio(pid, IOPRIO_CLASS_BE, 7);
@@ -541,8 +755,9 @@ fn apply_governor(dir: &Path, verbose: bool) {
     if verbose && (ws_changed || updated_count > 0) {
         let elapsed = start.elapsed();
         println!(
-            "[governor-rs] Workspace {} | Actualizados: {} | Activos: {} | Fondo: {} | Audio: {} | Cgroups: {} ({:?})",
+            "[governor-rs] Workspace {} | Proyectos activos: {:?} | Actualizados: {} | Activos: {} | Fondo: {} | Audio: {} | Cgroups: {} ({:?})",
             active_ws.id,
+            active_projects,
             updated_count,
             active_all.len(),
             throttled,
@@ -598,13 +813,17 @@ fn main() {
                     let event = line.split(">>").next().unwrap_or("").trim();
                     match event {
                         "workspace" | "workspacev2" | "focusedmon" | "openwindow"
-                        | "closewindow" | "destroyworkspace" => {
+                        | "closewindow" | "destroyworkspace" | "activewindow"
+                        | "activewindowv2" => {
                             apply_governor(&dir, verbose);
                         }
                         _ => {}
                     }
                 }
-                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut => {
+                Err(ref e)
+                    if e.kind() == std::io::ErrorKind::WouldBlock
+                        || e.kind() == std::io::ErrorKind::TimedOut =>
+                {
                     continue;
                 }
                 Err(_) => break,

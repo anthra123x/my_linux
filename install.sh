@@ -305,6 +305,15 @@ if [ "$DO_CONFIG" = true ]; then
         cp -rn "$REPO_DIR/.config/wallmotion/library"/* "$HOME/.config/wallmotion/library/" 2>/dev/null || true
         cp -rn "$REPO_DIR/.config/wallmotion/thumbs"/* "$HOME/.config/wallmotion/thumbs/" 2>/dev/null || true
     fi
+
+    # Registrar sesion de escritorio Omicron DE
+    if [ -f "$REPO_DIR/assets/sessions/omicron.desktop" ]; then
+        if [ "$(id -u)" = "0" ]; then
+            cp -f "$REPO_DIR/assets/sessions/omicron.desktop" /usr/share/wayland-sessions/ 2>/dev/null || true
+        elif sudo -n true 2>/dev/null; then
+            sudo cp -f "$REPO_DIR/assets/sessions/omicron.desktop" /usr/share/wayland-sessions/ 2>/dev/null || true
+        fi
+    fi
 fi
 
 # 3. Compilacion e instalacion de demonios de Rust

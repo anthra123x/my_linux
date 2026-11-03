@@ -84,19 +84,34 @@ EOF
 sysctl -p "$SYSCTL_CONF" >/dev/null 2>&1 || sysctl --system >/dev/null 2>&1 || true
 ok "sysctl cargado: vm.stat_interval=10, vm.compaction_proactiveness=20"
 
-# 3. Ajustar power-state-manager para optimizacion termica y balance energetico
-log "3/4  Optimizando politicas energeticas en /usr/local/bin/power-state-manager..."
+# 3. Configurar microcontrolador GPU Intel Gen12 (i915 GuC/HuC y FBC)
+log "3/5  Configurando /etc/modprobe.d/i915.conf (GuC/HuC y Framebuffer Compression)..."
+cat << 'EOF' > /etc/modprobe.d/i915.conf
+# Aceleracion por hardware y microcontrolador para Intel Gen12 Xe-LP (Alder Lake-N)
+# enable_guc=3: delega planificacion y decodificacion de video en GuC/HuC
+# enable_fbc=1: compresion de framebuffer para reducir ancho de banda de memoria
+# fastboot=1: evita parpadeos en cambio de modo
+options i915 enable_guc=3 enable_fbc=1 fastboot=1
+EOF
+ok "i915.conf configurado con enable_guc=3 y enable_fbc=1"
+
+# 4. Ajustar power-state-manager para optimizacion termica, GPU dinamica y balance energetico
+log "4/5  Optimizando politicas energeticas en /usr/local/bin/power-state-manager..."
 PSM="/usr/local/bin/power-state-manager"
 if [ -f "$PSM" ]; then
   cp -a "$PSM" "$BACKUP_DIR/power-state-manager"
   # Reemplazar suelo de 45% a 25% y EPP performance a balance_performance en apply_ac
   sed -i 's/echo 45 >\/sys\/devices\/system\/cpu\/intel_pstate\/min_perf_pct/echo 25 >\/sys\/devices\/system\/cpu\/intel_pstate\/min_perf_pct/g' "$PSM"
   sed -i 's/echo performance >"$f"/echo balance_performance >"$f"/g' "$PSM"
-  ok "power-state-manager actualizado con balance_performance y suelo 25%"
+  # GPU minimo a 200 MHz en reposo (en lugar de bloquear a 800 MHz)
+  sed -i 's/echo 800 >"$card\/gt_min_freq_mhz"/echo 200 >"$card\/gt_min_freq_mhz"/g' "$PSM"
+  # Ventilador ASUS en modo estandar (0) en vez de overboost permanente (1)
+  sed -i 's/echo 1 >\/sys\/devices\/platform\/asus-nb-wmi\/throttle_thermal_policy/echo 0 >\/sys\/devices\/platform\/asus-nb-wmi\/throttle_thermal_policy/g' "$PSM"
+  ok "power-state-manager actualizado: GPU min 200 MHz, fan ASUS equilibrado, EPP balance_performance"
 fi
 
-# 4. Re-aplicar estado energetico actual
-log "4/4  Reaplicando perfil de energia activo..."
+# 5. Re-aplicar estado energetico actual
+log "5/5  Reaplicando perfil de energia activo..."
 if [ -x "$PSM" ]; then
   "$PSM" apply >/dev/null 2>&1 || true
 fi
