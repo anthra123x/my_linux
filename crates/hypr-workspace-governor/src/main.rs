@@ -1,19 +1,20 @@
-//! hypr-workspace-governor (Rust v2.0 - Zero Jitter Engine)
+//! hypr-workspace-governor (Rust v2.1 - Smooth Adaptive Engine)
 //!
 //! Gobernador de recursos nativo en Rust para Hyprland.
-//! Elimina tirones (micro-stutters) garantizando que el espacio activo reciba el 100%
-//! del rendimiento de CPU, GPU e I/O, sin contención de spinlocks del planificador.
+//! Elimina tirones (micro-stutters) garantizando que el espacio activo reciba
+//! la maxima prioridad de CPU e I/O sin estrangular los procesos en segundo plano
+//! ni provocar inanicion de buffers en Wayland/D-Bus.
 //!
-//! Optimizaciones clave v2.0:
-//! - Caché de estado idempotente: solo emite syscalls cuando el estado de un proceso cambia.
-//! - Eliminación de inundación de syscalls: actúa a nivel de proceso (PRIO_PROCESS afecta a todos los hilos
-//!   internos atómicamente, eliminando miles de syscalls redundantes a nivel de TID).
-//! - Prevención de inversión de prioridades: usa nice 19 + IOPRIO idle para evitar bloqueos D-Bus/XWayland.
-//! - Auto-pausa inteligente de fondos animados (Wallmotion): pausa mpvpaper cuando hay ventanas activas
-//!   (ahorrando 20% de CPU y GPU en Hyprland) y lo reanuda instantáneamente al ver el escritorio limpio.
-//! - Restauración determinista de prioridades al salir (SIGINT / SIGTERM).
+//! Optimizaciones v2.1:
+//! - Cache de arbol de procesos y audio con TTL: evita escanear /proc y ejecutar pactl
+//!   en cada evento individual de cambio de espacio.
+//! - Priorizacion balanceada (nice 5 / ioprio BE 5 para fondo, nice 0 / ioprio BE 0 para activo):
+//!   el proceso activo recibe la mayoria de ciclos de CPU de forma inmediata, mientras
+//!   las aplicaciones en segundo plano mantienen capacidad de respuesta para cambios instantaneos.
+//! - Reproduccion continua de fondos animados (Wallmotion) con coste minimo por hardware.
+//! - Debounce de eventos de cambio redundantes.
 
-use libc::{c_int, c_long, id_t, PRIO_PROCESS, SCHED_IDLE, SCHED_OTHER};
+use libc::{c_int, c_long, id_t, PRIO_PROCESS, SCHED_OTHER};
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -28,18 +29,31 @@ use std::time::{Duration, Instant};
 const SYS_IOPRIO_SET: c_long = 251;
 const IOPRIO_WHO_PROCESS: c_int = 1;
 const IOPRIO_CLASS_BE: c_int = 2;
-const IOPRIO_CLASS_IDLE: c_int = 3;
 
 // Estados de proceso
 const STATE_ACTIVE: u8 = 0;
 const STATE_AUDIO_PROTECTED: u8 = 1;
 const STATE_INACTIVE: u8 = 2;
+const STATE_HEAVY: u8 = 3;
 
 static RUNNING: AtomicBool = AtomicBool::new(true);
 static MANAGED_PIDS: Mutex<Option<HashSet<i32>>> = Mutex::new(None);
 static PID_STATES: Mutex<Option<HashMap<i32, u8>>> = Mutex::new(None);
 static LAST_WS_ID: Mutex<i32> = Mutex::new(-1);
-static WALLPAPER_PAUSED: AtomicBool = AtomicBool::new(false);
+
+struct ProcessTreeCache {
+    tree: HashMap<i32, Vec<i32>>,
+    known_roots: HashSet<i32>,
+    last_update: Instant,
+}
+
+struct AudioCache {
+    pids: HashSet<i32>,
+    last_update: Instant,
+}
+
+static TREE_CACHE: Mutex<Option<ProcessTreeCache>> = Mutex::new(None);
+static AUDIO_CACHE: Mutex<Option<AudioCache>> = Mutex::new(None);
 
 #[derive(Debug, Deserialize)]
 struct ActiveWorkspace {
@@ -100,8 +114,6 @@ fn restore_all_pids() {
         }
         *guard = None;
     }
-    // Asegurar reanudación de wallpaper si estaba pausado
-    set_wallmotion_pause(false);
 }
 
 extern "C" fn sig_handler(_: c_int) {
@@ -131,8 +143,8 @@ fn find_hypr_socket_dir() -> Option<PathBuf> {
 fn query_hypr_command(dir: &Path, cmd: &str) -> Option<String> {
     let sock_path = dir.join(".socket.sock");
     let mut stream = UnixStream::connect(sock_path).ok()?;
-    stream.set_read_timeout(Some(Duration::from_millis(300))).ok()?;
-    stream.set_write_timeout(Some(Duration::from_millis(300))).ok()?;
+    stream.set_read_timeout(Some(Duration::from_millis(200))).ok()?;
+    stream.set_write_timeout(Some(Duration::from_millis(200))).ok()?;
     stream.write_all(cmd.as_bytes()).ok()?;
     
     let mut buf = Vec::new();
@@ -147,35 +159,14 @@ fn query_hypr_command(dir: &Path, cmd: &str) -> Option<String> {
     String::from_utf8(buf).ok()
 }
 
-fn set_wallmotion_pause(pause: bool) {
-    let current = WALLPAPER_PAUSED.load(Ordering::Relaxed);
-    if current == pause {
-        return;
-    }
-
-    let xdg = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| format!("/run/user/{}", unsafe { libc::getuid() }));
-    let wm_dir = Path::new(&xdg).join("wallmotion");
-    if !wm_dir.exists() {
-        return;
-    }
-
-    let cmd = format!("{{\"command\": [\"set_property\", \"pause\", {}]}}\n", pause);
-
-    if let Ok(entries) = fs::read_dir(&wm_dir) {
-        for entry in entries.flatten() {
-            let p = entry.path();
-            if p.extension().map_or(false, |ext| ext == "sock") {
-                if let Ok(mut stream) = UnixStream::connect(&p) {
-                    let _ = stream.set_write_timeout(Some(Duration::from_millis(50)));
-                    let _ = stream.write_all(cmd.as_bytes());
-                }
-            }
+fn get_cached_audio_pids() -> HashSet<i32> {
+    let mut cache_guard = AUDIO_CACHE.lock().unwrap();
+    if let Some(ref c) = *cache_guard {
+        if c.last_update.elapsed() < Duration::from_secs(3) {
+            return c.pids.clone();
         }
     }
-    WALLPAPER_PAUSED.store(pause, Ordering::Relaxed);
-}
 
-fn get_audio_pids() -> HashSet<i32> {
     let mut pids = HashSet::new();
     if let Ok(output) = Command::new("pactl")
         .args(["-f", "json", "list", "sink-inputs"])
@@ -195,6 +186,12 @@ fn get_audio_pids() -> HashSet<i32> {
             }
         }
     }
+
+    *cache_guard = Some(AudioCache {
+        pids: pids.clone(),
+        last_update: Instant::now(),
+    });
+
     pids
 }
 
@@ -221,6 +218,24 @@ fn build_process_tree() -> HashMap<i32, Vec<i32>> {
             }
         }
     }
+    tree
+}
+
+fn get_cached_process_tree(current_roots: &HashSet<i32>) -> HashMap<i32, Vec<i32>> {
+    let mut cache_guard = TREE_CACHE.lock().unwrap();
+    if let Some(ref c) = *cache_guard {
+        if c.last_update.elapsed() < Duration::from_secs(5) && c.known_roots == *current_roots {
+            return c.tree.clone();
+        }
+    }
+
+    let tree = build_process_tree();
+    *cache_guard = Some(ProcessTreeCache {
+        tree: tree.clone(),
+        known_roots: current_roots.clone(),
+        last_update: Instant::now(),
+    });
+
     tree
 }
 
@@ -262,27 +277,21 @@ fn apply_governor(dir: &Path, verbose: bool) {
         Err(_) => return,
     };
 
-    // El usuario prefiere que el fondo animado siga corriendo fluidamente
-    // incluso con ventanas encima para preservar la sensacion de modernidad.
-    set_wallmotion_pause(false);
-
     let mut last_ws_guard = LAST_WS_ID.lock().unwrap();
     let ws_changed = *last_ws_guard != active_ws.id;
     *last_ws_guard = active_ws.id;
 
-    let audio_roots = get_audio_pids();
-    let proc_tree = build_process_tree();
-
+    let mut all_client_roots = HashSet::new();
     let mut active_roots = HashSet::new();
     let mut inactive_roots = HashSet::new();
-
-    // Identificar clases que son de computo puro no interactivo (ej. LibreOffice)
     let mut heavy_compute_roots = HashSet::new();
 
     for c in &clients {
         if c.pid <= 1 {
             continue;
         }
+        all_client_roots.insert(c.pid);
+
         if c.class.contains("libreoffice") || c.class.contains("soffice") {
             heavy_compute_roots.insert(c.pid);
         }
@@ -294,10 +303,13 @@ fn apply_governor(dir: &Path, verbose: bool) {
         }
     }
 
-    // Si una aplicación tiene ventanas en ambos espacios, gana el activo
+    // Si una aplicacion tiene ventanas en ambos espacios, gana el activo
     for p in &active_roots {
         inactive_roots.remove(p);
     }
+
+    let audio_roots = get_cached_audio_pids();
+    let proc_tree = get_cached_process_tree(&all_client_roots);
 
     let active_all = expand_process_children(&active_roots, &proc_tree);
     let mut inactive_all = expand_process_children(&inactive_roots, &proc_tree);
@@ -318,7 +330,7 @@ fn apply_governor(dir: &Path, verbose: bool) {
 
     let mut updated_count = 0;
 
-    // 1. Promover procesos activos a SCHED_OTHER, nice 0, E/S normal
+    // 1. Promover procesos del workspace activo a SCHED_OTHER, nice 0, E/S prioritaria
     for &pid in &active_all {
         current_managed.insert(pid);
         let prev = states_map.get(&pid).copied();
@@ -336,35 +348,41 @@ fn apply_governor(dir: &Path, verbose: bool) {
     let mut throttled = 0;
     let mut protected = 0;
 
-    // 2. Ajustar procesos inactivos de forma segura sin causar inversion de prioridades
+    // 2. Ajustar procesos inactivos de forma equilibrada sin causar inanicion ni congelamientos
     for &pid in &inactive_all {
         current_managed.insert(pid);
         let has_audio = audio_all.contains(&pid);
         let is_heavy = heavy_all.contains(&pid);
 
-        let target_state = if has_audio { STATE_AUDIO_PROTECTED } else { STATE_INACTIVE };
+        let target_state = if has_audio {
+            STATE_AUDIO_PROTECTED
+        } else if is_heavy {
+            STATE_HEAVY
+        } else {
+            STATE_INACTIVE
+        };
         let prev = states_map.get(&pid).copied();
 
         if prev != Some(target_state) {
             unsafe {
                 if has_audio {
-                    // Protegido para audio sin micro-cortes
+                    // Audio protegido: nunca se retrasa para evitar cortes
                     set_policy(pid, SCHED_OTHER);
-                    set_nice(pid, 8);
-                    set_ioprio(pid, IOPRIO_CLASS_BE, 4);
+                    set_nice(pid, 0);
+                    set_ioprio(pid, IOPRIO_CLASS_BE, 1);
                     protected += 1;
                 } else if is_heavy {
-                    // Computo pesado aislado completamente (SCHED_IDLE)
-                    set_policy(pid, SCHED_IDLE);
-                    set_nice(pid, 19);
-                    set_ioprio(pid, IOPRIO_CLASS_IDLE, 0);
+                    // Computo pesado aislado (exportacion de documentos, compilacion)
+                    set_policy(pid, SCHED_OTHER);
+                    set_nice(pid, 15);
+                    set_ioprio(pid, IOPRIO_CLASS_BE, 7);
                     throttled += 1;
                 } else {
-                    // Aplicaciones de escritorio generales en segundo plano:
-                    // nice 19 + IOPRIO_IDLE evita inversion de prioridades en D-Bus/Wayland
+                    // Aplicaciones de escritorio en segundo plano:
+                    // nice 5 da ~75% de ciclos al activo sin matar los sockets de Wayland/D-Bus.
                     set_policy(pid, SCHED_OTHER);
-                    set_nice(pid, 19);
-                    set_ioprio(pid, IOPRIO_CLASS_IDLE, 0);
+                    set_nice(pid, 5);
+                    set_ioprio(pid, IOPRIO_CLASS_BE, 5);
                     throttled += 1;
                 }
             }

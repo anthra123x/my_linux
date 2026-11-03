@@ -451,33 +451,40 @@ def stop(quiet: bool = False) -> None:
         state["paused"] = False
         write_json(STATE, state)
     if pids and not quiet:
-        print("⏹  Fondo detenido.")
+        print("[wallmotion] Fondo detenido.")
 
 
 def ipc_sock(output: str) -> Path:
     return RUN / f"mpv-{output}.sock"
 
 
-def ipc(output: str, command: str) -> bool:
-    """Envía un comando al socket IPC de mpv."""
+def ipc_cmd(output: str, command: list) -> bool:
+    """Envia un comando estructurado al socket IPC de mpv con retorno JSON."""
     sock = ipc_sock(output)
     if not sock.exists():
         return False
     try:
         import socket as _socket
         with _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM) as s:
-            s.settimeout(2)
+            s.settimeout(1.5)
             s.connect(str(sock))
-            s.sendall(json.dumps({"command": command.split()}).encode())
-            s.recv(4096)
-        return True
-    except (OSError, ValueError):
+            payload = json.dumps({"command": command}) + "\n"
+            s.sendall(payload.encode("utf-8"))
+            raw = s.recv(4096)
+            data = json.loads(raw.decode("utf-8", errors="ignore").splitlines()[0])
+            return data.get("error") == "success"
+    except Exception:
         return False
+
+
+def ipc(output: str, command: str) -> bool:
+    """Compatibilidad: envia comando de texto plano a mpv IPC."""
+    return ipc_cmd(output, command.split())
 
 
 def play(target: str | None = None, add_to_playlist: bool = False) -> dict:
     if not engine_installed():
-        die("mpvpaper no está instalado. Ejecuta:  wallmotion setup")
+        die("mpvpaper no esta instalado. Ejecuta: wallmotion setup")
 
     if target:
         item = find_item(target)
@@ -486,7 +493,7 @@ def play(target: str | None = None, add_to_playlist: bool = False) -> dict:
             if path.exists():
                 item, _ = import_file(path)
             else:
-                die(f"No encuentro el fondo '{target}'. Prueba:  wallmotion list")
+                die(f"No encuentro el fondo '{target}'. Prueba: wallmotion list")
         else:
             path = Path(item["path"])
         if not path.exists():
@@ -497,18 +504,58 @@ def play(target: str | None = None, add_to_playlist: bool = False) -> dict:
         if item is None:
             items = library()
             if not items:
-                die("Biblioteca vacía. Añade fondos con:  wallmotion add <archivo>")
+                die("Biblioteca vacia. Anade fondos con: wallmotion add <archivo>")
             item = items[0]
+            path = Path(item["path"])
+        else:
+            path = Path(item["path"])
 
     screens = outputs()
     if not screens:
         log("hyprctl no reporta salidas; uso ALL")
         screens = ["ALL"]
 
+    # 1. Conmutacion atomica via socket IPC si mpvpaper ya esta en ejecucion
+    current_pids = running_pids()
+    if current_pids:
+        all_sockets_ready = True
+        for screen in screens:
+            sock = ipc_sock(screen)
+            if not sock.exists() or not ipc_cmd(screen, ["get_property", "path"]):
+                all_sockets_ready = False
+                break
+
+        if all_sockets_ready:
+            all_loaded = True
+            for screen in screens:
+                if not ipc_cmd(screen, ["loadfile", str(path), "replace"]):
+                    all_loaded = False
+                ipc_cmd(screen, ["set_property", "pause", False])
+
+            if all_loaded:
+                state = read_json(STATE, {})
+                state.update({
+                    "current": item.get("id", ""),
+                    "title": item.get("title", ""),
+                    "path": str(path),
+                    "started": time.time(),
+                    "paused": False,
+                })
+                if add_to_playlist:
+                    plist = state.get("playlist") or []
+                    if item.get("id") not in plist:
+                        plist.append(item.get("id", ""))
+                    state["playlist"] = plist
+                write_json(STATE, state)
+
+                res = item.get("resolution") or f"{item.get('width')}x{item.get('height')}"
+                print(f"[wallmotion] Fondo aplicado: {item.get('title')} ({res}, {item.get('vcodec', '?')})")
+                return item
+
+    # 2. Arranque en frio / recuperacion si no estaba ejecutandose
     stop(quiet=True)
     RUN.mkdir(parents=True, exist_ok=True)
 
-    # Detener hyprpaper para evitar colisión de capas Wayland (background) y liberar RAM
     try:
         subprocess.run(
             ["systemctl", "--user", "stop", "hyprpaper.service"],
@@ -538,7 +585,13 @@ def play(target: str | None = None, add_to_playlist: bool = False) -> dict:
             log(f"no se pudo lanzar mpvpaper: {exc}")
             die(f"Error al lanzar mpvpaper: {exc}")
         pids.append(proc.pid)
-        time.sleep(0.35)  # deja tiempo a mpv abrir el socket
+
+    # Esperar confirmacion de sockets
+    deadline = time.time() + 2.0
+    while time.time() < deadline:
+        if all(ipc_sock(s).exists() for s in screens):
+            break
+        time.sleep(0.05)
 
     write_json(PIDFILE, {"pids": pids, "started": time.time()})
 
@@ -558,22 +611,20 @@ def play(target: str | None = None, add_to_playlist: bool = False) -> dict:
     write_json(STATE, state)
 
     res = item.get("resolution") or f"{item.get('width')}x{item.get('height')}"
-    print(f"▶  {item.get('title')}  ({res}, {item.get('vcodec', '?')})")
+    print(f"[wallmotion] Fondo iniciado: {item.get('title')} ({res}, {item.get('vcodec', '?')})")
     return item
 
 
 def pause_resume(action: str) -> None:
     screens = outputs() or ["ALL"]
+    pause_bool = (action == "pause")
     for screen in screens:
-        ok = ipc(screen, "set_property pause yes" if action == "pause"
-                 else "set_property pause no")
-        if not ok and action == "resume":
-            ok = ipc(screen, "set_property pause no")
+        ipc_cmd(screen, ["set_property", "pause", pause_bool])
     state = read_json(STATE, {})
-    state["paused"] = (action == "pause")
+    state["paused"] = pause_bool
     write_json(STATE, state)
-    icon = "⏸" if action == "pause" else "▶"
-    print(f"{icon}  Reproducción: {action}")
+    status_str = "pausado" if pause_bool else "reanudado"
+    print(f"[wallmotion] Reproduccion: {status_str}")
 
 
 def step(direction: str) -> None:
@@ -620,13 +671,13 @@ def status() -> dict:
 def cmd_status(_args) -> None:
     s = status()
     if not s["engine_ok"]:
-        print("✗ mpvpaper no instalado →  wallmotion setup")
+        print("[ERR] mpvpaper no instalado -> wallmotion setup")
         return
     if not s["running"]:
-        print("○ Sin fondo activo.   Galería:  wallmotion gallery")
+        print("[INFO] Sin fondo activo. Galeria: wallmotion gallery")
         return
-    print(f"▶  {s['title']}")
-    print(f"   {'⏸ en pausa' if s['paused'] else 'reproduciendo'}"
+    print(f"[wallmotion] {s['title']}")
+    print(f"   {'[PAUSA]' if s['paused'] else '[PLAY]'}"
           f"  ·  CPU {s['cpu']}%  ·  RAM {s['mem_mb']} MB"
           f"  ·  {', '.join(s['outputs']) or 'ALL'}")
     if s["mem_mb"] > 700:
@@ -854,7 +905,7 @@ def curate(count: int = 12, query: str = "") -> int:
 
     queue = [c for c in queue if c.get("source") not in owned]
     if not queue:
-        print("✓ Nada nuevo que añadir (o sin resultados para ese tema).")
+        print("[INFO] Nada nuevo que anadir (o sin resultados para ese tema).")
         return 0
 
     added = failed = 0
@@ -877,10 +928,10 @@ def curate(count: int = 12, query: str = "") -> int:
         if not is_new:
             continue
         added += 1
-        print(f"  ✓ {cand['title'][:60]}")
+        print(f"  [OK] {cand['title'][:60]}")
 
     if added:
-        print(f"\n✓ {added} fondos añadidos.  Ábrelos con:  wallmotion gallery")
+        print(f"\n[OK] {added} fondos anadidos. Galeria: wallmotion gallery")
     if failed:
         print(f"  {failed} descargas fallaron (límite de peticiones del servidor). "
               "Reinténtalo en unos minutos.")
@@ -917,8 +968,8 @@ def autostart(action: str = "status") -> None:
 
     if action == "status":
         body = target.read_text(encoding="utf-8") if target.exists() else ""
-        print("✓ Arranque automático activo" if marker in body
-              else "○ Arranque automático inactivo  →  wallmotion autostart enable")
+        print("[OK] Arranque automatico activo" if marker in body
+              else "[INFO] Arranque automatico inactivo -> wallmotion autostart enable")
         return
 
     if action == "enable":
@@ -931,7 +982,7 @@ def autostart(action: str = "status") -> None:
         lines += ["", "# ── wallmotion: fondos animados ──", AUTOSTART_LINE,
                   "# Fin wallpaper animado"]
         target.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        print(f"✓ Arranque automático añadido en {target}")
+        print(f"[OK] Arranque automatico anadido en {target}")
         print(f"  línea: {AUTOSTART_LINE}")
         return
 
@@ -940,7 +991,7 @@ def autostart(action: str = "status") -> None:
             body = _remove_block(target.read_text(encoding="utf-8"),
                                  "wallmotion: fondos animados")
             target.write_text(body, encoding="utf-8")
-        print("✓ Arranque automático desactivado")
+        print("[OK] Arranque automatico desactivado")
 
 
 def _remove_block(text: str, marker: str) -> str:
@@ -961,8 +1012,8 @@ def idle(action: str = "status") -> None:
 
     if action == "status":
         body = target.read_text(encoding="utf-8") if target.exists() else ""
-        print("✓ Pausa al bloquear activa" if marker in body
-              else "○ Pausa al bloquear inactiva  →  wallmotion idle enable")
+        print("[OK] Pausa al bloquear activa" if marker in body
+              else "[INFO] Pausa al bloquear inactiva -> wallmotion idle enable")
         return
 
     if action == "enable":
@@ -976,18 +1027,18 @@ def idle(action: str = "status") -> None:
                  .replace("{resume}", f"{SELF} resume"))
         with target.open("a", encoding="utf-8") as fh:
             fh.write("\n" + block)
-        print(f"✓ Pausa al bloquear añadida en {target}")
+        print(f"[OK] Pausa al bloquear anadida en {target}")
         print("  hypridle pausará el vídeo tras 60 s de inactividad y")
         print("  lo reanudará al desbloquear. Reinicia Hyprland para aplicarlo.")
         return
 
     if action == "disable":
         if not target.exists():
-            print("○ Nada que hacer.")
+            print("[INFO] Nada que hacer.")
             return
         cleaned = _remove_block(target.read_text(encoding="utf-8"), marker)
         target.write_text(cleaned, encoding="utf-8")
-        print("✓ Pausa al bloquear desactivada")
+        print("[OK] Pausa al bloquear desactivada")
 
 
 def restore() -> None:
@@ -1143,8 +1194,8 @@ function render(){
       const id = c.dataset.id;
       toast('Cargando ' + id + '…');
       const r = await api('/api/apply', { id });
-      if(r.ok){ CUR = id; render(); toast('✓ Fondo aplicado'); refresh(); }
-      else toast('✗ ' + (r.error||'error'));
+      if(r.ok){ CUR = id; render(); toast('[OK] Fondo aplicado'); refresh(); }
+      else toast('[ERR] ' + (r.error||'error'));
     };
     const v = c.querySelector('video');
     c.addEventListener('mouseenter', () => { v.play().catch(()=>{}); });
@@ -1174,7 +1225,7 @@ document.addEventListener('keydown', e => {
 
 async function cmd(action, msg){
   const r = await api('/api/command', { action });
-  toast(r.ok ? '✓ ' + msg : '✗ ' + (r.error||'error'));
+  toast(r.ok ? '[OK] ' + msg : '[ERR] ' + (r.error||'error'));
   refresh(); render();
 }
 $('#prev').onclick = () => cmd('prev','Anterior');
@@ -1334,14 +1385,14 @@ def cmd_setup(_args) -> None:
 
     missing = [b for b in ("ffmpeg", "ffprobe") if not have(b)]
     if missing:
-        print(f"✗ Falta en el sistema: {', '.join(missing)}")
+        print(f"[ERR] Falta en el sistema: {', '.join(missing)}")
     else:
-        print("✓ ffmpeg y ffprobe presentes  (miniaturas y análisis de vídeo)")
+        print("[OK] ffmpeg y ffprobe presentes (miniaturas y analisis de video)")
 
     if engine_installed():
-        print("✓ mpvpaper instalado  (motor de reproducción)")
+        print("[OK] mpvpaper instalado (motor de reproduccion)")
     else:
-        print("✗ mpvpaper NO instalado  (falta el motor de vídeo)")
+        print("[ERR] mpvpaper NO instalado (falta el motor de video)")
         print()
         print("  Ejecuta esto y escribe tu contraseña cuando la pida:")
         print(f"    bash {installer}")
@@ -1353,7 +1404,7 @@ def cmd_setup(_args) -> None:
     idle("enable")
     state = read_json(STATE, {})
     print()
-    print(f"✓ Biblioteca: {len(library())} fondos")
+    print(f"[OK] Biblioteca: {len(library())} fondos")
     if state.get("current"):
         print("→ Restaura tu último fondo con:  wallmotion restore")
     print("→ Abre la galería con:           wallmotion gallery")
@@ -1374,7 +1425,7 @@ def cmd_add(args) -> None:
         elif raw.startswith(("http://", "https://")):
             targets.append(raw)
         else:
-            print(f"✗ No encuentro: {raw}", file=sys.stderr)
+            print(f"[ERR] No encuentro: {raw}", file=sys.stderr)
 
     if not targets:
         die("Nada que importar.")
@@ -1384,13 +1435,13 @@ def cmd_add(args) -> None:
         item, is_new = (import_url(str(t), tags=args.tags) if isinstance(t, str)
                         else import_file(t, tags=args.tags))
         if not item:
-            print(f"✗ Falló: {t}", file=sys.stderr)
+            print(f"[ERR] Fallo: {t}", file=sys.stderr)
             continue
         if not is_new:
             print(f"· {item['title']} ya estaba en la galería")
             continue
         ok += 1
-        print(f"✓ {item['title']}  ({item['width']}×{item['height']}, "
+        print(f"[OK] {item['title']} ({item['width']}x{item['height']}, "
               f"{fmt_duration(item['duration'])}, {fmt_size(item['size'])})")
     print(f"\n{ok} añadidos.  Ábrelos con:  wallmotion gallery")
 
@@ -1405,7 +1456,7 @@ def cmd_list(args) -> None:
     print(f"\n{'#':>3}  {'TÍTULO':<38} {'RESOLUCIÓN':<11} {'DUR':<6} {'TAMAÑO':<9} CODEC")
     print("─" * 96)
     for i, it in enumerate(items):
-        mark = "▶" if it["id"] == cur else " "
+        mark = "*" if it["id"] == cur else " "
         res = f"{it['width']}x{it['height']}"
         print(f"{mark}{i:>3}  {it['title'][:38]:<38} {res:<11} "
               f"{fmt_duration(it['duration']):<6} {fmt_size(it['size']):<9} {it['vcodec'] or '?'}")
@@ -1421,7 +1472,7 @@ def cmd_rm(args) -> None:
     if item.get("thumb"):
         Path(item["thumb"]).unlink(missing_ok=True)
     save_library([i for i in items if i["id"] != item["id"]])
-    print(f"✓ Eliminado: {item['title']}")
+    print(f"[OK] Eliminado: {item['title']}")
 
 
 def cmd_search(args) -> None:

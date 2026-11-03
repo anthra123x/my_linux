@@ -61,6 +61,11 @@ vm.min_free_kbytes = 65536
 vm.swappiness = 150
 vm.page-cluster = 0
 
+# watermark_scale_factor=150: despierta kswapd de forma anticipada en segundo plano
+# para comprimir paginas en ZRAM antes de llegar al suelo critico, eliminando
+# por completo las pausas de direct reclaim sincronicas en aplicaciones GUI.
+vm.watermark_scale_factor = 150
+
 # Temporizadores de reposo: reduce wakeups innecesarios de CPU de 1s a 10s.
 # Permite a los nucleos Gracemont entrar en estados de bajo consumo C8/C10.
 vm.stat_interval = 10

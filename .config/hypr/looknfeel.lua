@@ -35,7 +35,7 @@ hl.config({
   },
   misc = {
     vrr = 0, -- Tasa fija a 60Hz sin fluctuaciones de refresco
-    render_unfocused_fps = 30, -- 30 FPS en segundo plano para ahorrar ancho de banda y priorizar 60 FPS limpios en la app activa
+    render_unfocused_fps = 60, -- 60 FPS consistentes para eliminar tirones al cambiar entre workspaces
   },
 })
 
@@ -48,5 +48,5 @@ hl.animation({ leaf = "windowsIn", enabled = true, speed = 4, bezier = "snappy",
 hl.animation({ leaf = "windowsOut", enabled = true, speed = 3, bezier = "snappy", style = "popin 80%" })
 hl.animation({ leaf = "windowsMove", enabled = true, speed = 3, bezier = "snappy" })
 hl.animation({ leaf = "fade", enabled = true, speed = 4, bezier = "fluid60" })
-hl.animation({ leaf = "workspaces", enabled = true, speed = 3, bezier = "fluid60", style = "slide" })
+hl.animation({ leaf = "workspaces", enabled = true, speed = 4, bezier = "snappy", style = "slide" })
 
