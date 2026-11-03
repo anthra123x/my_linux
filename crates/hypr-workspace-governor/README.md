@@ -7,9 +7,10 @@ Garantiza aislamiento de CPU, memoria y ancho de banda de E/S, dedicando el 100%
 
 ## 1. Proposito y Alcance
 - Escuchar eventos de cambio de espacio de trabajo y ventanas desde el socket IPC de Hyprland (`.socket2.sock`).
-- Relegar procesos de espacios inactivos a prioridad ociosa del kernel (`SCHED_IDLE`, `nice 19`, `IOPRIO_CLASS_IDLE`).
-- Promover ventanas del espacio activo a máxima prioridad interactiva (`SCHED_OTHER`, `nice 0`, `IOPRIO_CLASS_BE`).
-- Preservar la reproducción ininterrumpida de audio (música, conferencias, llamadas) en aplicaciones de fondo mediante consulta de sumideros de PipeWire / PulseAudio.
+- Priorizar el espacio de trabajo activo de forma balanceada (`nice 0`, `IOPRIO_CLASS_BE 0`) dedicandole mas del 75% de los ciclos de CPU y preferencia de E/S.
+- Ajustar ventanas inactivas a prioridad adaptativa (`nice 5`, `IOPRIO_CLASS_BE 5`) para eliminar contencion de recursos sin provocar inanicion de sockets Wayland ni tirones al re-enfocarlas.
+- Cache de bajo jitter (`TREE_CACHE` por 5s y `AUDIO_CACHE` por 3s) para evitar sobrecarga de lecturas a `/proc` y ejecucion de subprocesos durante las animaciones de cambio de espacio.
+- Preservar la reproduccion ininterrumpida de audio (musica, conferencias, llamadas) en aplicaciones de fondo mediante consulta de sumideros de PipeWire / PulseAudio.
 
 ---
 

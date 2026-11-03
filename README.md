@@ -122,14 +122,16 @@ graph TD
 1. **Memoria ZRAM de 12 GB (Compresion ZSTD):**
    - Configurado en `/etc/systemd/zram-generator.conf` con prioridad 100.
    - 0 Bytes de uso en el archivo de intercambio en SSD NVMe, eliminando la latencia de contencion de disco.
-2. **Gobernador de Espacios de Trabajo en Rust:**
-   - Reduce aplicaciones pesadas fuera de pantalla (LibreOffice, navegadores en reposo) de mas del 10% de CPU a menos del 0.5% en reposo.
+2. **Gobernador de Espacios de Trabajo en Rust (v2.1):**
+   - Priorizacion balanceada: `nice 0` y `IOPRIO_CLASS_BE 0` para el espacio activo; `nice 5` y `IOPRIO_CLASS_BE 5` para aplicaciones de fondo.
+   - Caché con TTL en memoria para arbol de procesos (5s) y sumideros de audio (3s), eliminando llamadas repetitivas a `pactl` y lecturas de `/proc` durante el cambio de espacios.
    - Conexion directa mediante socket UNIX sin llamadas lentas a `hyprctl`.
-3. **Priorizacion de GPU a 60 FPS:**
-   - `render_unfocused_fps = 30`: Las ventanas sin foco repintan a 30 FPS para dedicar todo el ancho de banda a la ventana interactiva.
+3. **Fluidez Consistente a 60 FPS:**
+   - `render_unfocused_fps = 60`: Elimina la limitacion artificial de 30 FPS en ventanas desenfocadas, garantizando transiciones de espacio de trabajo 100% fluidas a 60 FPS.
 4. **Afinamiento del Kernel y Politicas Termicas:**
    - Transparent Huge Pages configurado en `madvise` mediante `/etc/tmpfiles.d/thp.conf` (ahorro de hasta 700 MB de RAM fragmentada).
    - `vm.stat_interval = 10`: Reduce interrupciones de temporizador en reposo en un 90%, habilitando estados C8/C10 en los nucleos Gracemont.
+   - `vm.watermark_scale_factor = 150`: Despierta `kswapd` anticipadamente en segundo plano, eliminando las pausas de direct reclaim sincronicas en aplicaciones graficas.
    - Script de aplicacion integral: [`scripts/apply-kernel-optimizations.sh`](file:///home/omicron/.gemini/antigravity-ide/scratch/dotfiles/scripts/apply-kernel-optimizations.sh).
 
 ---
@@ -180,10 +182,11 @@ El desarrollo del proyecto se divide en 3 fases estrategicas:
 │   ├── btop/               # Monitor del sistema con temas
 │   ├── cava/               # Visualizador de audio
 │   ├── environment.d/      # Variables de entorno graficas
+│   ├── fastfetch/          # Logotipo bare-metal y perfil
 │   ├── fish/               # Configuracion de Fish Shell
 │   ├── fuzzel/             # Lanzador de aplicaciones
 │   ├── ghostty/ & kitty/   # Emuladores de terminal
-│   ├── hypr/               # Configuracion completa de Hyprland (Lua)
+│   ├── hypr/               # Configuracion modular de Hyprland (Lua)
 │   ├── matugen/            # Plantillas Material You
 │   ├── quickshell/         # Barra superior y paneles
 │   ├── starship.toml       # Estilo del prompt
@@ -191,17 +194,23 @@ El desarrollo del proyecto se divide en 3 fases estrategicas:
 │   └── wallmotion/         # Fondos animados y miniaturas
 ├── assets/                 # Capturas del entorno de escritorio
 ├── crates/                 # Componentes nativos del sistema en Rust
-│   └── hypr-workspace-governor/  # Daemon de aislamiento de recursos
+│   ├── cell-powerd/        # Daemon de energia y perfiles AC/bateria
+│   └── hypr-workspace-governor/  # Daemon de aislamiento de recursos v2.1
 ├── home/                   # Archivos para el directorio raiz del usuario
 │   ├── .bashrc
 │   ├── .gitconfig
 │   └── .zshrc
+├── packages/               # Manifiestos modulares de paquetes del sistema
+│   ├── audio.txt           # Servidor PipeWire y librerias de sonido
+│   ├── core.txt            # Compositor Wayland y portales
+│   ├── dev.txt             # Cadena de herramientas Rust y compilacion
+│   ├── tools.txt           # Terminales y utilidades CLI
+│   └── ui.txt              # Barra Quickshell y herramientas graficas
 ├── scripts/                # Scripts de soporte, energia y mantenimiento
 │   ├── apply-kernel-optimizations.sh  # Despliegue de ajustes de kernel y sysctl
-│   ├── battery-monitor.sh             # Monitor de bateria
-│   ├── wallmotion                     # Motor de fondos animados
+│   ├── wallmotion                     # Motor de fondos animados por hardware
 │   └── README.md                      # Documentacion modular de scripts
-├── install.sh              # Instalador automatico con compilacion de crates Rust
+├── install.sh              # Instalador universal interactivo y no interactivo
 ├── sync.sh                 # Sincronizador bidireccional (Sistema -> Repo)
 ├── .gitignore
 └── README.md
@@ -209,23 +218,51 @@ El desarrollo del proyecto se divide en 3 fases estrategicas:
 
 ---
 
-## Despliegue y Uso
+## Metodologia de Instalacion
 
-### Clonar el Repositorio
+Omicron Shell cuenta con un instalador universal automatizado e interactivo capaz de desplegarse en cualquier instalacion de **Arch Linux**, **CachyOS** o derivadas.
+
+### Metodo 1: Instalacion Rapida en Una Linea (Recomendado)
+
+Ejecuta el siguiente comando en la terminal para clonar y arrancar el asistente interactivo de instalacion:
 
 ```bash
-git clone https://github.com/anthra123x/my_linux.git ~/dotfiles
-cd ~/dotfiles
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/anthra123x/my_linux/main/install.sh)"
 ```
 
-### Instalacion
+### Metodo 2: Clonacion Manual y Despliegue
 
-Compila los crates de Rust nativos e instala la configuracion completa:
 ```bash
-./install.sh --symlink
+# 1. Clonar el repositorio
+git clone https://github.com/anthra123x/my_linux.git ~/.dotfiles
+cd ~/.dotfiles
+
+# 2. Despliegue completo desatendido (instala dependencias, compila Rust y activa servicios)
+./install.sh --all
+
+# 3. O instalacion guiada paso a paso
+./install.sh --interactive
 ```
+
+### Modos y Parametros del Instalador
+
+| Parametro | Descripcion |
+| :--- | :--- |
+| `./install.sh` | Despliegue estandar (enlaces simbolicos, compila crates de Rust y activa servicios). |
+| `./install.sh --all` | Instalacion total desde cero (dependencias pacman/AUR, dotfiles, Rust, servicios y kernel). |
+| `./install.sh --interactive` | Asistente por consola que pregunta paso a paso que componentes desplegar. |
+| `./install.sh --copy` | Despliega mediante copia fisica directa en lugar de enlaces simbolicos. |
+| `./install.sh --deps` | Instala unicamente los paquetes y dependencias del sistema declarados en `packages/`. |
+| `./install.sh --rust-only` | Compila e instala unicamente los demonios en Rust (`cell-powerd` y `governor`). |
+| `./install.sh --services-only` | Habilita y arranca unicamente los servicios systemd de usuario. |
+| `./install.sh --kernel` | Ejecuta el afinamiento del kernel y parametros sysctl (requiere sudo). |
+| `./install.sh --no-backup` | Omite la generacion automatica de copias de seguridad de las configuraciones previas. |
+
+---
 
 ### Aplicar Optimizaciones de Kernel en el Sistema
+
+Para fijar la configuracion del planificador, ZRAM, memoria virtual (`watermark_scale_factor = 150`) y politicas energeticas:
 
 ```bash
 sudo ~/.local/bin/apply-kernel-optimizations.sh

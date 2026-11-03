@@ -1,0 +1,7 @@
+pipewire
+wireplumber
+pipewire-pulse
+pipewire-alsa
+libpulse
+brightnessctl
+power-profiles-daemon

@@ -1,0 +1,6 @@
+quickshell
+matugen-bin
+fuzzel
+wlogout
+mpvpaper
+mpv

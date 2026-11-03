@@ -1,0 +1,5 @@
+rust
+cargo
+base-devel
+git
+pkg-config

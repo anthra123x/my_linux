@@ -17,6 +17,7 @@ target/
 # Logs y sockets
 *.log
 *.sock
+*.wants/
 
 # Zsh compilados
 *.zwc

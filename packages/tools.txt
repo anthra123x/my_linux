@@ -1,0 +1,17 @@
+kitty
+fish
+starship
+fastfetch
+eza
+bat
+btop
+cava
+yazi
+zenity
+wl-clipboard
+cliphist
+ffmpeg
+rsync
+sed
+curl
+wget
