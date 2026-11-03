@@ -29,13 +29,13 @@ hl.config({
       size = 3,
       passes = 1, -- 1 pasada ultraligera para Intel UHD
       new_optimizations = true,
-      ignore_opacity = true, -- Evita recalcular blur en elementos con opacidad
-      vibrancy = 0.15,
+      ignore_opacity = false, -- Solo aplica blur en ventanas o capas translucidas; ignora ventanas 100% opacas
+      vibrancy = 0.10,
     },
   },
   misc = {
     vrr = 0, -- Tasa fija a 60Hz sin fluctuaciones de refresco
-    render_unfocused_fps = 60, -- 60 FPS consistentes para eliminar tirones al cambiar entre workspaces
+    render_unfocused_fps = 15, -- Ventanas sin foco limitadas a 15 FPS para reducir consumo en segundo plano
   },
 })
 

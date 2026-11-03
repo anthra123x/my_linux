@@ -59,7 +59,7 @@ graph TD
     end
 
     subgraph C2 ["Capa 2: Supervision y Gobernanza (Rust)"]
-        R1["hypr-workspace-governor (Priorizacion balanceada nice 5 / nice 0)"]
+        R1["hypr-workspace-governor (Aislamiento Cgroups v2 cpu.max + Scheduler)"]
         R2["Proteccion de audio en tiempo real via PipeWire (pactl cache)"]
         R3["Consumo de memoria nativa: inferior a 1.4 MB de RAM"]
     end
@@ -80,7 +80,7 @@ graph TD
 ```
 
 ### Principios Fundamentales
-1. **Aislamiento Activo de Espacios de Trabajo:** Las ventanas en espacios de trabajo ocultos se trasladan automaticamente a la politica del kernel `SCHED_OTHER` con prioridad adaptativa `nice 5` y clase de E/S balanceada. El espacio activo recibe el 100% de prioridad interactiva (`nice 0`), eliminando contencion sin provocar inanicion de sockets Wayland.
+1. **Aislamiento Activo de Espacios de Trabajo:** Las aplicaciones en espacios de trabajo ocultos se confinan a cuotas estrictas de cgroups v2 (`cpu.max: 30%` de 1 nucleo) y prioridad adaptativa (`nice 10`), impidiendo que procesos en segundo plano saturen los 8 nucleos Gracemont ni causen contencion en el bus LPDDR5 y la cache L3. El espacio activo recibe el 100% de prioridad interactiva (`cpu.max: max`, `nice 0`), garantizando 60 FPS estables.
 2. **Proteccion Inteligente de Flujos Multimedia:** El supervisor distingue entre procesos silenciosos y aplicaciones con reproduccion de audio activa (Spotify, llamadas, reproductores), asegurando que el sonido nunca sufra micro-cortes.
 3. **Cero Dependencia de Interpretes en Segundo Plano:** Los demonios residentes se compilan en Rust nativo con optimizacion en tiempo de enlace (LTO), eliminando recolectores de basura, tiempos de arranque en frio y huellas de memoria elevadas.
 4. **Reserva Total de Potencia para 60 FPS:** El procesador (Intel Core i3-N305 de 8 nucleos Gracemont) modula su frecuencia de reposo a ~1.4 GHz, dejando los 23W de potencia electrica del encapsulado disponibles para que la GPU Intel UHD sostenga 1250 MHz constantes.

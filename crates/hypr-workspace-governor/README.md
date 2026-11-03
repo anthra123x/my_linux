@@ -1,26 +1,28 @@
-# hypr-workspace-governor
+# hypr-workspace-governor (v3.0 - Linux Cgroup v2 & Adaptive Scheduler)
 
-Gobernador de recursos nativo en Rust para el compositor Wayland Hyprland.
-Garantiza aislamiento de CPU, memoria y ancho de banda de E/S, dedicando el 100% de la capacidad del sistema a las ventanas del espacio de trabajo activo y en foco.
+Gobernador de recursos nativo en Rust para el compositor Wayland Hyprland y la shell Omicron.
+Garantiza aislamiento estricto de CPU mediante controladores de cgroup v2 (`cpu.max` y `cpu.weight`) combinados con politicas de prioridad interactiva (`nice` e `ioprio`), asegurando que las aplicaciones en segundo plano no saturen los 8 nucleos Gracemont ni causen micro-tirones por contencion de memoria y cache.
 
 ---
 
 ## 1. Proposito y Alcance
 - Escuchar eventos de cambio de espacio de trabajo y ventanas desde el socket IPC de Hyprland (`.socket2.sock`).
-- Priorizar el espacio de trabajo activo de forma balanceada (`nice 0`, `IOPRIO_CLASS_BE 0`) dedicandole mas del 75% de los ciclos de CPU y preferencia de E/S.
-- Ajustar ventanas inactivas a prioridad adaptativa (`nice 5`, `IOPRIO_CLASS_BE 5`) para eliminar contencion de recursos sin provocar inanicion de sockets Wayland ni tirones al re-enfocarlas.
-- Cache de bajo jitter (`TREE_CACHE` por 5s y `AUDIO_CACHE` por 3s) para evitar sobrecarga de lecturas a `/proc` y ejecucion de subprocesos durante las animaciones de cambio de espacio.
-- Preservar la reproduccion ininterrumpida de audio (musica, conferencias, llamadas) en aplicaciones de fondo mediante consulta de sumideros de PipeWire / PulseAudio.
+- Priorizar el espacio de trabajo activo de forma completa (`cpu.max: max 100000`, `cpu.weight: 1000`, `nice 0`, `ioprio BE 0`).
+- Aislar ventanas inactivas limitando su cuota maxima de CPU (`cpu.max: 30000 100000` = maximo 30% de un solo nucleo) y peso minimo (`cpu.weight: 1`, `nice 10`, `ioprio BE 6`), manteniendo los 7 nucleos restantes en reposo termico y frecuencia baja.
+- Proteccion inteligente de audio (Spotify, llamadas): preserva hasta un 60% de margen de un nucleo (`cpu.max: 60000 100000`, `cpu.weight: 100`, `nice 0`, `ioprio BE 2`), evitando cortes de sonido sin permitir que los renderizadores CEF/Chromium malgasten GPU y ciclos.
+- Supervision de Wallmotion (`mpvpaper`): asigna prioridad subordinada (`nice 10`, `ioprio BE 6`) para reproduccion fluida en hardware sin interferir con la entrada de teclado o raton.
+- Delegacion automatica de cgroup v2 en `app.slice` y `app-graphical.slice` activando `+cpu` de forma no invasiva.
 
 ---
 
 ## 2. Contratos
 - **Entrada:** Eventos IPC de Hyprland (`workspace>>`, `focusedmon>>`, `openwindow>>`, `closewindow>>`).
 - **Salida / Efectos de Sistema:**
-  - Syscall `sched_setscheduler(pid, SCHED_IDLE | SCHED_OTHER, &param)`
+  - Escritura atomica en `/sys/fs/cgroup/.../cpu.max` y `/sys/fs/cgroup/.../cpu.weight`.
+  - Syscall `sched_setscheduler(pid, SCHED_OTHER, &param)`
   - Syscall `setpriority(PRIO_PROCESS, pid, nice)`
   - Syscall 251 `SYS_ioprio_set(IOPRIO_WHO_PROCESS, pid, prio)`
-- **Manejo de Señales:** Ante `SIGINT` o `SIGTERM`, ejecuta una rutina que revierte inmediatamente todos los procesos gestionados a `SCHED_OTHER` y `nice 0`.
+- **Manejo de Senales:** Ante `SIGINT` o `SIGTERM`, ejecuta una rutina que revierte inmediatamente todos los cgroups gestionados a cuota completa (`max 100000`, peso 100) y todos los procesos a `nice 0`.
 
 ---
 
@@ -28,9 +30,10 @@ Garantiza aislamiento de CPU, memoria y ancho de banda de E/S, dedicando el 100%
 - **Internas:**
   - Hyprland IPC sockets (`.socket.sock` para consultas JSON y `.socket2.sock` para flujo de eventos).
   - PipeWire / PulseAudio CLI (`pactl -f json list sink-inputs`).
+  - Cgroups v2 (`/sys/fs/cgroup/user.slice/...`).
 - **Externas (Crates):**
   - `libc = "0.2"` (llamadas directas a syscalls POSIX/Linux sin sobrecarga FFI).
-  - `serde = "1.0"` y `serde_json = "1.0"` (deserialización de estructuras JSON de Hyprland y pactl).
+  - `serde = "1.0"` y `serde_json = "1.0"` (deserializacion de estructuras JSON de Hyprland y pactl).
 
 ---
 

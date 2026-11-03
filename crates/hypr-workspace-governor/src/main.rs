@@ -1,18 +1,22 @@
-//! hypr-workspace-governor (Rust v2.1 - Smooth Adaptive Engine)
+//! hypr-workspace-governor (Rust v3.0 - Linux Cgroup v2 & Adaptive Scheduler Engine)
 //!
-//! Gobernador de recursos nativo en Rust para Hyprland.
-//! Elimina tirones (micro-stutters) garantizando que el espacio activo reciba
-//! la maxima prioridad de CPU e I/O sin estrangular los procesos en segundo plano
-//! ni provocar inanicion de buffers en Wayland/D-Bus.
+//! Gobernador de recursos nativo en Rust para Hyprland (Omicron Shell).
+//! Implementa Aislamiento Activo de Recursos mediante controladores de cgroup v2
+//! del kernel Linux (cpu.max y cpu.weight) combinados con politicas de prioridad
+//! interactiva (nice e ioprio).
 //!
-//! Optimizaciones v2.1:
-//! - Cache de arbol de procesos y audio con TTL: evita escanear /proc y ejecutar pactl
-//!   en cada evento individual de cambio de espacio.
-//! - Priorizacion balanceada (nice 5 / ioprio BE 5 para fondo, nice 0 / ioprio BE 0 para activo):
-//!   el proceso activo recibe la mayoria de ciclos de CPU de forma inmediata, mientras
-//!   las aplicaciones en segundo plano mantienen capacidad de respuesta para cambios instantaneos.
-//! - Reproduccion continua de fondos animados (Wallmotion) con coste minimo por hardware.
-//! - Debounce de eventos de cambio redundantes.
+//! Caracteristicas v3.0:
+//! - Aislamiento estricto via Linux Cgroup v2: limita fisicamente la cuota de CPU
+//!   (cpu.max) de las aplicaciones en segundo plano para evitar que despierten los
+//!   8 nucleos Gracemont a 3 GHz, protegiendo el bus de memoria LPDDR5 y la cache L3.
+//! - Cuota garantizada para el workspace activo: cpu.max sin limite (max 100000) y
+//!   cpu.weight de 1000 con nice 0 para respuesta interactiva instantanea a 60 FPS.
+//! - Proteccion inteligente de audio (PipeWire): preserva un 60% de margen de un nucleo
+//!   para reproductores activos (Spotify, llamadas) congelando su renderizado pesado de UI.
+//! - Gobernanza de fondos animados (Wallmotion): asigna prioridad subordinada a mpvpaper
+//!   para garantizar decodificacion por hardware continua sin disputar ciclos con el usuario.
+//! - Auto-habilitacion transparente de delegacion cgroup v2 en app.slice y app-graphical.slice.
+//! - Restauracion atomica al detener el servicio.
 
 use libc::{c_int, c_long, id_t, PRIO_PROCESS, SCHED_OTHER};
 use serde::Deserialize;
@@ -38,6 +42,7 @@ const STATE_HEAVY: u8 = 3;
 
 static RUNNING: AtomicBool = AtomicBool::new(true);
 static MANAGED_PIDS: Mutex<Option<HashSet<i32>>> = Mutex::new(None);
+static MANAGED_CGROUPS: Mutex<Option<HashSet<PathBuf>>> = Mutex::new(None);
 static PID_STATES: Mutex<Option<HashMap<i32, u8>>> = Mutex::new(None);
 static LAST_WS_ID: Mutex<i32> = Mutex::new(-1);
 
@@ -87,6 +92,12 @@ struct SinkProperties {
     process_id: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct WallmotionPidFile {
+    #[serde(default)]
+    pids: Vec<i32>,
+}
+
 unsafe fn set_ioprio(pid: i32, ioclass: c_int, iodata: c_int) {
     let prio = (ioclass << 13) | (iodata & 0x1FFF);
     libc::syscall(SYS_IOPRIO_SET, IOPRIO_WHO_PROCESS, pid, prio);
@@ -101,6 +112,52 @@ unsafe fn set_nice(pid: i32, nice: c_int) {
     libc::setpriority(PRIO_PROCESS, pid as id_t, nice);
 }
 
+fn ensure_cgroup_cpu_controller() {
+    let uid = unsafe { libc::getuid() };
+    let targets = [
+        format!("/sys/fs/cgroup/user.slice/user-{}.slice/user@{}.service/cgroup.subtree_control", uid, uid),
+        format!("/sys/fs/cgroup/user.slice/user-{}.slice/user@{}.service/app.slice/cgroup.subtree_control", uid, uid),
+        format!("/sys/fs/cgroup/user.slice/user-{}.slice/user@{}.service/app.slice/app-graphical.slice/cgroup.subtree_control", uid, uid),
+    ];
+
+    for t in &targets {
+        let p = Path::new(t);
+        if p.exists() {
+            if let Ok(mut f) = fs::OpenOptions::new().write(true).open(p) {
+                let _ = f.write_all(b"+cpu\n");
+            }
+        }
+    }
+}
+
+fn get_cgroup_dir_for_pid(pid: i32) -> Option<PathBuf> {
+    let cg_file = format!("/proc/{}/cgroup", pid);
+    let contents = fs::read_to_string(cg_file).ok()?;
+    for line in contents.lines() {
+        if let Some(rest) = line.strip_prefix("0::") {
+            let trimmed = rest.trim_start_matches('/');
+            if !trimmed.is_empty() {
+                let p = Path::new("/sys/fs/cgroup").join(trimmed);
+                if p.exists() {
+                    return Some(p);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn set_cgroup_limits(cg: &Path, cpu_max: &str, cpu_weight: &str) {
+    let max_file = cg.join("cpu.max");
+    if max_file.exists() {
+        let _ = fs::write(max_file, cpu_max);
+    }
+    let weight_file = cg.join("cpu.weight");
+    if weight_file.exists() {
+        let _ = fs::write(weight_file, cpu_weight);
+    }
+}
+
 fn restore_all_pids() {
     if let Ok(mut guard) = MANAGED_PIDS.lock() {
         if let Some(ref pids) = *guard {
@@ -110,6 +167,15 @@ fn restore_all_pids() {
                     set_nice(pid, 0);
                     set_ioprio(pid, IOPRIO_CLASS_BE, 0);
                 }
+            }
+        }
+        *guard = None;
+    }
+
+    if let Ok(mut guard) = MANAGED_CGROUPS.lock() {
+        if let Some(ref cgroups) = *guard {
+            for cg in cgroups {
+                set_cgroup_limits(cg, "max 100000\n", "100\n");
             }
         }
         *guard = None;
@@ -146,7 +212,7 @@ fn query_hypr_command(dir: &Path, cmd: &str) -> Option<String> {
     stream.set_read_timeout(Some(Duration::from_millis(200))).ok()?;
     stream.set_write_timeout(Some(Duration::from_millis(200))).ok()?;
     stream.write_all(cmd.as_bytes()).ok()?;
-    
+
     let mut buf = Vec::new();
     let mut chunk = [0u8; 8192];
     loop {
@@ -257,8 +323,27 @@ fn expand_process_children(roots: &HashSet<i32>, tree: &HashMap<i32, Vec<i32>>) 
     all
 }
 
+fn govern_wallmotion() {
+    let uid = unsafe { libc::getuid() };
+    let pidfile = PathBuf::from(format!("/run/user/{}/wallmotion/pids.json", uid));
+    if let Ok(contents) = fs::read_to_string(pidfile) {
+        if let Ok(data) = serde_json::from_str::<WallmotionPidFile>(&contents) {
+            for pid in data.pids {
+                if pid > 1 {
+                    unsafe {
+                        set_nice(pid, 10);
+                        set_ioprio(pid, IOPRIO_CLASS_BE, 6);
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn apply_governor(dir: &Path, verbose: bool) {
     let start = Instant::now();
+    ensure_cgroup_cpu_controller();
+
     let ws_json = match query_hypr_command(dir, "j/activeworkspace") {
         Some(s) => s,
         None => return,
@@ -286,31 +371,54 @@ fn apply_governor(dir: &Path, verbose: bool) {
     let mut inactive_roots = HashSet::new();
     let mut heavy_compute_roots = HashSet::new();
 
+    let mut active_cgroups = HashSet::new();
+    let mut inactive_cgroups = HashSet::new();
+    let mut heavy_cgroups = HashSet::new();
+
     for c in &clients {
         if c.pid <= 1 {
             continue;
         }
         all_client_roots.insert(c.pid);
+        let cg_opt = get_cgroup_dir_for_pid(c.pid);
 
         if c.class.contains("libreoffice") || c.class.contains("soffice") {
             heavy_compute_roots.insert(c.pid);
+            if let Some(ref cg) = cg_opt {
+                heavy_cgroups.insert(cg.clone());
+            }
         }
 
         if c.workspace.id == active_ws.id {
             active_roots.insert(c.pid);
+            if let Some(ref cg) = cg_opt {
+                active_cgroups.insert(cg.clone());
+            }
         } else {
             inactive_roots.insert(c.pid);
+            if let Some(ref cg) = cg_opt {
+                inactive_cgroups.insert(cg.clone());
+            }
         }
     }
 
-    // Si una aplicacion tiene ventanas en ambos espacios, gana el activo
+    // Regla de precedencia: si una aplicacion (o cgroup) tiene ventanas activas, gana el activo
+    for cg in &active_cgroups {
+        inactive_cgroups.remove(cg);
+    }
     for p in &active_roots {
         inactive_roots.remove(p);
     }
 
     let audio_roots = get_cached_audio_pids();
-    let proc_tree = get_cached_process_tree(&all_client_roots);
+    let mut audio_cgroups = HashSet::new();
+    for &apid in &audio_roots {
+        if let Some(cg) = get_cgroup_dir_for_pid(apid) {
+            audio_cgroups.insert(cg);
+        }
+    }
 
+    let proc_tree = get_cached_process_tree(&all_client_roots);
     let active_all = expand_process_children(&active_roots, &proc_tree);
     let mut inactive_all = expand_process_children(&inactive_roots, &proc_tree);
 
@@ -321,6 +429,42 @@ fn apply_governor(dir: &Path, verbose: bool) {
     let audio_all = expand_process_children(&audio_roots, &proc_tree);
     let heavy_all = expand_process_children(&heavy_compute_roots, &proc_tree);
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // Control de Cgroups v2 (Nivel Kernel)
+    // ─────────────────────────────────────────────────────────────────────────
+    let mut current_cgroups = HashSet::new();
+
+    // 1. Cgroups activos: cuota completa (max 100000) y peso interactivo maximo
+    for cg in &active_cgroups {
+        current_cgroups.insert(cg.clone());
+        set_cgroup_limits(cg, "max 100000\n", "1000\n");
+    }
+
+    // 2. Cgroups inactivos: aislamiento de cuota de CPU estricto
+    for cg in &inactive_cgroups {
+        current_cgroups.insert(cg.clone());
+        if audio_cgroups.contains(cg) {
+            // Audio en segundo plano (Spotify): max 60% de 1 nucleo para reproduccion limpia
+            // impidiendo que la UI/GPU de Chromium sature los 8 nucleos
+            set_cgroup_limits(cg, "60000 100000\n", "100\n");
+        } else if heavy_cgroups.contains(cg) {
+            // Computo pesado aislado (exportacion de documentos, compilacion libreoffice): max 20%
+            set_cgroup_limits(cg, "20000 100000\n", "1\n");
+        } else {
+            // Aplicaciones de escritorio en segundo plano (Brave, ventanas inactivas de IDE):
+            // Cuota dura al 30% de 1 nucleo y peso minimo. Impide el consumo parasito
+            // de bucles de JS (WhatsApp) y mantiene los demas 7 nucleos en reposo absoluto.
+            set_cgroup_limits(cg, "30000 100000\n", "1\n");
+        }
+    }
+
+    if let Ok(mut guard) = MANAGED_CGROUPS.lock() {
+        *guard = Some(current_cgroups);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Control de Planificacion de Procesos (Nice / I/O Priority)
+    // ─────────────────────────────────────────────────────────────────────────
     let mut current_managed = HashSet::new();
     let mut states_guard = PID_STATES.lock().unwrap();
     if states_guard.is_none() {
@@ -330,7 +474,7 @@ fn apply_governor(dir: &Path, verbose: bool) {
 
     let mut updated_count = 0;
 
-    // 1. Promover procesos del workspace activo a SCHED_OTHER, nice 0, E/S prioritaria
+    // Procesos activos -> SCHED_OTHER, nice 0, E/S prioritaria
     for &pid in &active_all {
         current_managed.insert(pid);
         let prev = states_map.get(&pid).copied();
@@ -348,7 +492,7 @@ fn apply_governor(dir: &Path, verbose: bool) {
     let mut throttled = 0;
     let mut protected = 0;
 
-    // 2. Ajustar procesos inactivos de forma equilibrada sin causar inanicion ni congelamientos
+    // Procesos inactivos -> Prioridades escalonadas
     for &pid in &inactive_all {
         current_managed.insert(pid);
         let has_audio = audio_all.contains(&pid);
@@ -366,23 +510,19 @@ fn apply_governor(dir: &Path, verbose: bool) {
         if prev != Some(target_state) {
             unsafe {
                 if has_audio {
-                    // Audio protegido: nunca se retrasa para evitar cortes
                     set_policy(pid, SCHED_OTHER);
                     set_nice(pid, 0);
-                    set_ioprio(pid, IOPRIO_CLASS_BE, 1);
+                    set_ioprio(pid, IOPRIO_CLASS_BE, 2);
                     protected += 1;
                 } else if is_heavy {
-                    // Computo pesado aislado (exportacion de documentos, compilacion)
                     set_policy(pid, SCHED_OTHER);
                     set_nice(pid, 15);
                     set_ioprio(pid, IOPRIO_CLASS_BE, 7);
                     throttled += 1;
                 } else {
-                    // Aplicaciones de escritorio en segundo plano:
-                    // nice 5 da ~75% de ciclos al activo sin matar los sockets de Wayland/D-Bus.
                     set_policy(pid, SCHED_OTHER);
-                    set_nice(pid, 5);
-                    set_ioprio(pid, IOPRIO_CLASS_BE, 5);
+                    set_nice(pid, 10);
+                    set_ioprio(pid, IOPRIO_CLASS_BE, 6);
                     throttled += 1;
                 }
             }
@@ -395,15 +535,19 @@ fn apply_governor(dir: &Path, verbose: bool) {
         *guard = Some(current_managed);
     }
 
+    // Gestionar prioridad de mpvpaper en segundo plano
+    govern_wallmotion();
+
     if verbose && (ws_changed || updated_count > 0) {
         let elapsed = start.elapsed();
         println!(
-            "[governor-rs] Workspace {} | Actualizados: {} | Activos: {} | Fondo: {} | Audio: {} ({:?})",
+            "[governor-rs] Workspace {} | Actualizados: {} | Activos: {} | Fondo: {} | Audio: {} | Cgroups: {} ({:?})",
             active_ws.id,
             updated_count,
             active_all.len(),
             throttled,
             protected,
+            active_cgroups.len() + inactive_cgroups.len(),
             elapsed
         );
     }

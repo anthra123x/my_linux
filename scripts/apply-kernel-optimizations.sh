@@ -73,6 +73,9 @@ vm.stat_interval = 10
 # Mitiga la agresividad de compactacion en segundo plano (ahorra ciclos con ZRAM).
 vm.compaction_proactiveness = 20
 
+# Latencia de ancho de banda CFS en cgroups v2 (reduce jitter al alternar cuotas).
+kernel.sched_cfs_bandwidth_slice_us = 3000
+
 # Control de congestion de red TCP BBR (baja latencia, anti-bufferbloat).
 net.core.default_qdisc = fq_codel
 net.ipv4.tcp_congestion_control = bbr
