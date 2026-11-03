@@ -1,8 +1,26 @@
-# Cell: Entorno de Escritorio y Arquitectura de Sistema
+```text
+       |  |  |  |  |  |  |
+    .--+--+--+--+--+--+--+--.
+    |  :  :  :  :  :  :  :  |        ____  __  __ ___ ____ ____   ___  _   _ 
+ ---+  [o]   OMICRON        +---    / __ \/  |/  /  _/ ____/ __ \/ __ \/ | / /
+ ---+  .-----------------.  +---   / / / / /|_/ // // /   / /_/ / / / /  |/ / 
+ ---+  |   >_ fn main()  |  +---  / /_/ / /  / // // /___/ _, _/ /_/ / /|  /  
+ ---+  |   {             |  +---  \____/_/  /_/___/\____/_/ |_|\____/_/ |_/   
+ ---+  |     sys.init(); |  +---
+ ---+  |     *ptr = 0x0; |  +---  ==============================================
+ ---+  |   }             |  +---   B A R E - M E T A L   L I N U X   S H E L L
+ ---+  .-----------------.  +---   Architecture: CachyOS x86_64 // Hyprland 0.57
+ ---+   ARCH: x86_64 // RS  +---   Core Daemons: Rust v2.1 Native Engine
+    |  :  :  :  :  :  :  :  |     ==============================================
+    '--+--+--+--+--+--+--+--'
+       |  |  |  |  |  |  |
+```
+
+# OMICRON: Entorno de Escritorio y Arquitectura de Sistema
 
 Entorno Wayland de alto rendimiento, bajo consumo y personalizacion dinamica para **CachyOS / Arch Linux**. Construido sobre **Hyprland**, componentes del sistema nativos en **Rust**, **Quickshell** (Material You), **Fish Shell** y el motor de fondos animados **Wallmotion**.
 
-El proyecto evoluciona desde una configuracion base hacia una **Shell reactiva y futura distribucion independiente (Cell OS)**, disenada bajo la premisa de **Aislamiento Dinamico de Recursos**: *el sistema solo consume energia y ciclos de computo para lo que esta visible y en foco en el espacio de trabajo actual*.
+El proyecto evoluciona desde una configuracion base hacia una **Shell reactiva y futura distribucion independiente (Omicron OS)** basada en la arquitectura modular **Cell**, disenada bajo la premisa de **Aislamiento Dinamico de Recursos**: *el sistema solo consume energia y ciclos de computo para lo que esta visible y en foco en el espacio de trabajo actual*.
 
 ---
 
@@ -22,9 +40,9 @@ El proyecto evoluciona desde una configuracion base hacia una **Shell reactiva y
 
 ---
 
-## Vision y Arquitectura de Cell
+## Vision y Arquitectura de Omicron (Motor Cell)
 
-A diferencia de los entornos de escritorio tradicionales (GNOME, KDE o Sway/Hyprland genericos) donde las aplicaciones en segundo plano compiten indefinidamente por tiempo de CPU, memoria y bus de renderizado, la arquitectura de **Cell** implementa una jerarquia de cuatro capas desacopladas con supervision activa en tiempo real:
+A diferencia de los entornos de escritorio tradicionales (GNOME, KDE o Sway/Hyprland genericos) donde las aplicaciones en segundo plano compiten indefinidamente por tiempo de CPU, memoria y bus de renderizado, la arquitectura de **Omicron Shell** implementa una jerarquia de cuatro capas desacopladas con supervision activa en tiempo real:
 
 ```mermaid
 graph TD
@@ -34,21 +52,21 @@ graph TD
         K3["THP madvise + vm.stat_interval 10 (C-states C8/C10)"]
     end
 
-    subgraph Capa 1: Compositor y Tubería Gráfica
+    subgraph Capa 1: Compositor y Tuberia Grafica
         W1["Hyprland 0.57.0 (Aquamarine, Lua)"]
-        W2["Tasa condicional: 30 FPS en reposo / 60 FPS en foco"]
+        W2["Tasa fija a 60 FPS sin tirones entre workspaces"]
         W3["Aceleracion por hardware Intel VA-API (VDBOX ASIC)"]
     end
 
     subgraph Capa 2: Supervision y Gobernanza (Rust)
-        R1["hypr-workspace-governor (Aislamiento SCHED_IDLE en segundo plano)"]
-        R2["Proteccion de audio en tiempo real via PipeWire (pactl)"]
-        R3["Consumo de memoria nativa: inferior a 1 MB de RAM"]
+        R1["hypr-workspace-governor (Priorizacion balanceada nice 5 / nice 0)"]
+        R2["Proteccion de audio en tiempo real via PipeWire (pactl cache)"]
+        R3["Consumo de memoria nativa: inferior a 1.4 MB de RAM"]
     end
 
-    subgraph Capa 3: Capa de Presentacion y Experiencia (Cell UI)
+    subgraph Capa 3: Capa de Presentacion y Experiencia (Omicron UI)
         U1["Quickshell + Matugen (Paletas dinamicas Material You)"]
-        U2["Wallmotion (60 FPS con 2x2 SSAA por hardware y 0% CPU)"]
+        U2["Wallmotion (Reemplazo atomico via IPC mpvpaper a 60 FPS)"]
         U3["Lanzador Fuzzel y Menu de energia Wlogout"]
     end
 
@@ -134,20 +152,20 @@ El sistema unifica dos motores de fondo con gestion automatica de capas en Wayla
 
 ---
 
-## Hoja de Ruta: De Dotfiles a Cell OS
+## Hoja de Ruta: De Dotfiles a Omicron OS
 
 El desarrollo del proyecto se divide en 3 fases estrategicas:
 
 ### Fase 1: Consolidacion de Demonios Nativos (Actual)
 - Migracion de demonios residentes de Python/Bash hacia Rust en `crates/`.
-- Perfeccionamiento del gobernador de recursos por espacio de trabajo.
-- Reduccion del consumo total en reposo a menos de 1.2 GB de RAM global (incluyendo entorno grafico y navegador ligero).
+- Perfeccionamiento del gobernador de recursos por espacio de trabajo con cache TTL de bajo jitter.
+- Optimizacion del reemplazo de fondos animados atomico por socket IPC con decodificacion VA-API sin costo de CPU.
 
-### Fase 2: Cell Shell Unificada (Medio Plazo)
+### Fase 2: Omicron Shell Unificada (Medio Plazo)
 - Integracion de los modulos de barra, lanzador, panel de notificaciones y selector de fondos en un runtime unificado con protocolo IPC propio (`cell-ipc`).
 - Centro de control grafico ligero para gestion de perfiles energeticos, visuales y de red sin dependencias pesadas de GNOME.
 
-### Fase 3: Distribucion Independiente (Cell OS - Largo Plazo)
+### Fase 3: Distribucion Independiente (Omicron OS - Largo Plazo)
 - Construccion de imagen ISO reproducible con instalador Calamares preconfigurado.
 - Repositorio de paquetes binarios optimizados con flags de compilacion x86-64-v3 y LTO activado.
 - Perfil de hardware autoconfigurado con politicas de distribucion energetica para graficos integrados Intel y AMD.

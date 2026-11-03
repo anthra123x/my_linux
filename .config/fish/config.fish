@@ -6,6 +6,11 @@ if status is-interactive
     # No greeting
     set fish_greeting
 
+    # Mostrar fastfetch con el logotipo de microarquitectura de Omicron
+    if test "$TERM" = "xterm-kitty" -a -z "$VSCODE_INJECTION"
+        fastfetch
+    end
+
     # Use starship
     function starship_transient_prompt_func
         starship module character
