@@ -43,6 +43,12 @@ reload_hyprpaper() {
 }
 
 turn_off() {
+  mkdir -p "$HOME/.config/wallmotion"
+  echo "static" > "$HOME/.config/wallmotion/mode" 2>/dev/null || true
+  echo "static" > "$CACHE_DIR/wallpaper_type" 2>/dev/null || true
+  if pgrep -x mpvpaper >/dev/null 2>&1; then
+    "$HOME/.local/bin/wallmotion" stop >/dev/null 2>&1 || true
+  fi
   # Try to get current wallpaper from hyprpaper IPC
   ACTIVE=$(hyprctl hyprpaper listactive 2>/dev/null | head -1)
   # Parse: hyprpaper answers "monitor: /path/to/wallpaper". It was read here as
@@ -74,6 +80,12 @@ turn_off() {
 }
 
 turn_on() {
+  mkdir -p "$HOME/.config/wallmotion"
+  echo "static" > "$HOME/.config/wallmotion/mode" 2>/dev/null || true
+  echo "static" > "$CACHE_DIR/wallpaper_type" 2>/dev/null || true
+  if pgrep -x mpvpaper >/dev/null 2>&1; then
+    "$HOME/.local/bin/wallmotion" stop >/dev/null 2>&1 || true
+  fi
   write_hyprpaper_conf "$BG_DIR" 30
   touch "$FLAG"
   if reload_hyprpaper; then
@@ -86,6 +98,32 @@ turn_on() {
 
 case "$ACTION" in
   apply)
+    # Comprobar si el modo guardado es animado (wallmotion)
+    MODE_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/wallmotion/mode"
+    CACHE_MODE="${XDG_CACHE_HOME:-$HOME/.cache}/wallpaper_type"
+    STATE_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/wallmotion/state.json"
+
+    IS_ANIMATED=0
+    if [[ -f "$MODE_FILE" && "$(cat "$MODE_FILE" 2>/dev/null)" == "animated" ]]; then
+      IS_ANIMATED=1
+    elif [[ -f "$CACHE_MODE" && "$(cat "$CACHE_MODE" 2>/dev/null)" == "animated" ]]; then
+      IS_ANIMATED=1
+    elif [[ ! -f "$MODE_FILE" && ! -f "$CACHE_MODE" && -f "$STATE_FILE" ]]; then
+      CURR=$(python3 -c 'import json; d=json.load(open("'"$STATE_FILE"'")); print("yes" if d.get("current") and not d.get("paused") else "no")' 2>/dev/null || echo "no")
+      [[ "$CURR" == "yes" ]] && IS_ANIMATED=1
+    fi
+
+    if (( IS_ANIMATED )); then
+      systemctl --user stop hyprpaper.service >/dev/null 2>&1 || true
+      if [[ -x "$HOME/.local/bin/wallmotion" ]]; then
+        "$HOME/.local/bin/wallmotion" restore >/dev/null 2>&1 || "$HOME/.local/bin/wallmotion" play >/dev/null 2>&1 || true
+      fi
+      exit 0
+    fi
+
+    if pgrep -x mpvpaper >/dev/null 2>&1; then
+      "$HOME/.local/bin/wallmotion" stop >/dev/null 2>&1 || true
+    fi
     # Put hyprpaper in whatever state the flag already records, without
     # changing that state. This is what autostart wants at login.
     #

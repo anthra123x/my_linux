@@ -29,6 +29,14 @@ CURRENT=$(cat "$CACHE_DIR/current_wallpaper_path" 2>/dev/null)
 THEME_DIR=$(dirname "$(dirname "$CURRENT")" 2>/dev/null)
 BG_DIR="$THEME_DIR/backgrounds"
 
+if [[ ! -d "$BG_DIR" ]]; then
+  if [[ -L "$HOME/.config/hypr/theme-active.lua" || -f "$HOME/.config/hypr/theme-active.lua" ]]; then
+    ACTIVE_TARGET=$(readlink -f "$HOME/.config/hypr/theme-active.lua" 2>/dev/null || true)
+    THEME_DIR=$(dirname "$(dirname "$ACTIVE_TARGET")" 2>/dev/null)
+    BG_DIR="$THEME_DIR/backgrounds"
+  fi
+fi
+
 if [[ ! -d $BG_DIR ]]; then
   notify-send "Wallpaper" "No backgrounds folder found for current theme"
   exit 1
@@ -172,6 +180,9 @@ echo "$SELECTED" > "$CACHE_DIR/current_wallpaper_path"
 
 # Disable live wallpaper mode (manual pick overrides cycling)
 rm -f "$CACHE_DIR/live_wallpaper_enabled"
+mkdir -p "$HOME/.config/wallmotion"
+echo "static" > "$HOME/.config/wallmotion/mode" 2>/dev/null || true
+echo "static" > "$CACHE_DIR/wallpaper_type" 2>/dev/null || true
 if pgrep -x mpvpaper >/dev/null 2>&1; then
   "$HOME/.local/bin/wallmotion" stop >/dev/null 2>&1 || true
 fi

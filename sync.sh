@@ -76,6 +76,9 @@ sync_file() {
             echo "Nuevo archivo en el sistema: $src"
         fi
     else
+        if [ "$(readlink -f "$src" 2>/dev/null)" = "$(readlink -f "$dest" 2>/dev/null)" ]; then
+            return
+        fi
         cp -p "$src" "$dest"
         log_ok "Sincronizado: $(basename "$src")"
     fi
@@ -121,7 +124,7 @@ for f in .bashrc .bash_profile .bash_logout .zshrc .zshenv .gitconfig .vimrc; do
 done
 
 # 3. Scripts del sistema
-for s in hypr-session-save hypr-session-restore lidwatch stale-process-reaper tmpfs-gc fix-laptop-audio.sh fix-oom-and-restore.sh fix-greeter-wallpaper.sh greeter-migrate-tuigreet.sh opencode-browser-gc animated-wallpaper-picker.sh animated-wallpaper-switcher.sh wallmotion battery-monitor.sh wallpaper-switcher.sh system-upgrade.sh optimize-boot.sh fix-wireless-and-gamepad.sh check-gamepad.sh pair-gamepad.py hyprsimple-restart-bar.sh; do
+for s in hypr-session-save hypr-session-restore lidwatch stale-process-reaper tmpfs-gc fix-laptop-audio.sh fix-oom-and-restore.sh fix-greeter-wallpaper.sh greeter-migrate-tuigreet.sh opencode-browser-gc animated-wallpaper-picker.sh animated-wallpaper-switcher.sh wallmotion battery-monitor.sh wallpaper-switcher.sh wallpaper-restore.sh live-wallpaper-toggle.sh system-upgrade.sh optimize-boot.sh fix-wireless-and-gamepad.sh check-gamepad.sh pair-gamepad.py hyprsimple-restart-bar.sh; do
     if [ -f "$HOME/.local/bin/$s" ]; then
         sync_file "$HOME/.local/bin/$s" "$REPO_DIR/scripts/$s"
         chmod +x "$REPO_DIR/scripts/$s"

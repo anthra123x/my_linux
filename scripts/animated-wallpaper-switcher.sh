@@ -47,6 +47,10 @@ case "$ACTION" in
       echo "Uso: $0 apply <id>" >&2
       exit 1
     fi
+    mkdir -p "$CFG_DIR" "${XDG_CACHE_HOME:-$HOME/.cache}"
+    echo "animated" > "$CFG_DIR/mode"
+    echo "animated" > "${XDG_CACHE_HOME:-$HOME/.cache}/wallpaper_type"
+    systemctl --user stop hyprpaper.service >/dev/null 2>&1 || true
     "$WALLMOTION_BIN" play "$ID"
     THUMB="$THUMBS_DIR/$ID.jpg"
     if [[ -f "$THUMB" ]]; then
@@ -115,19 +119,30 @@ except Exception:
 
   toggle-stop)
     PARAM="${2:-}"
+    mkdir -p "$CFG_DIR" "${XDG_CACHE_HOME:-$HOME/.cache}"
     if [[ "$PARAM" == "off" ]]; then
+      echo "static" > "$CFG_DIR/mode"
+      echo "static" > "${XDG_CACHE_HOME:-$HOME/.cache}/wallpaper_type"
       "$WALLMOTION_BIN" stop >/dev/null 2>&1 || true
       systemctl --user start hyprpaper.service >/dev/null 2>&1 || true
       notify-send "Fondo animado" "Reproducción detenida" 2>/dev/null || true
     elif [[ "$PARAM" == "on" ]]; then
+      echo "animated" > "$CFG_DIR/mode"
+      echo "animated" > "${XDG_CACHE_HOME:-$HOME/.cache}/wallpaper_type"
+      systemctl --user stop hyprpaper.service >/dev/null 2>&1 || true
       "$WALLMOTION_BIN" restore >/dev/null 2>&1 || "$WALLMOTION_BIN" play >/dev/null 2>&1 || true
       notify-send "Fondo animado" "Reproducción reanudada" 2>/dev/null || true
     else
       if pgrep -x mpvpaper >/dev/null 2>&1; then
+        echo "static" > "$CFG_DIR/mode"
+        echo "static" > "${XDG_CACHE_HOME:-$HOME/.cache}/wallpaper_type"
         "$WALLMOTION_BIN" stop >/dev/null 2>&1 || true
         systemctl --user start hyprpaper.service >/dev/null 2>&1 || true
         notify-send "Fondo animado" "Reproducción detenida" 2>/dev/null || true
       else
+        echo "animated" > "$CFG_DIR/mode"
+        echo "animated" > "${XDG_CACHE_HOME:-$HOME/.cache}/wallpaper_type"
+        systemctl --user stop hyprpaper.service >/dev/null 2>&1 || true
         "$WALLMOTION_BIN" restore >/dev/null 2>&1 || "$WALLMOTION_BIN" play >/dev/null 2>&1 || true
         notify-send "Fondo animado" "Reproducción reanudada" 2>/dev/null || true
       fi
