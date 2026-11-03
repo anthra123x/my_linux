@@ -5,3 +5,4 @@ Exec=uwsm start -e -D Hyprland hyprland.desktop
 TryExec=uwsm
 DesktopNames=Omicron;Hyprland
 Type=Application
+

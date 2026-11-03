@@ -52,7 +52,20 @@ case "$ACTION" in
     echo "animated" > "${XDG_CACHE_HOME:-$HOME/.cache}/wallpaper_type"
     systemctl --user stop hyprpaper.service >/dev/null 2>&1 || true
     "$WALLMOTION_BIN" play "$ID"
+
+    # Sincronizar fotograma en alta definición para la pantalla de bloqueo (hyprlock)
+    LOCKSCREEN_IMG="${XDG_CACHE_HOME:-$HOME/.cache}/current_lockscreen.png"
+    VIDEO_FILE="$CFG_DIR/library/$ID.mp4"
     THUMB="$THUMBS_DIR/$ID.jpg"
+
+    if [[ -f "$VIDEO_FILE" ]]; then
+      ffmpeg -y -ss 00:00:01 -i "$VIDEO_FILE" -frames:v 1 -update 1 "$LOCKSCREEN_IMG" >/dev/null 2>&1 || {
+        [[ -f "$THUMB" ]] && cp -f "$THUMB" "$LOCKSCREEN_IMG" 2>/dev/null || true
+      }
+    elif [[ -f "$THUMB" ]]; then
+      cp -f "$THUMB" "$LOCKSCREEN_IMG" 2>/dev/null || true
+    fi
+
     if [[ -f "$THUMB" ]]; then
       notify-send "Fondo animado" "Fondo aplicado: $ID" -i "$THUMB" 2>/dev/null || true
     else

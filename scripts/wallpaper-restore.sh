@@ -30,6 +30,23 @@ if (( IS_ANIMATED )) && [[ -x "$WALLMOTION_BIN" ]]; then
   # 1. Modo animado persistente: detener hyprpaper y restaurar mpvpaper con VAAPI
   systemctl --user stop hyprpaper.service >/dev/null 2>&1 || true
   "$WALLMOTION_BIN" restore >/dev/null 2>&1 || "$WALLMOTION_BIN" play >/dev/null 2>&1 || true
+
+  # Sincronizar fotograma de fondo animado para la pantalla de bloqueo (hyprlock)
+  LOCKSCREEN_IMG="$CACHE_DIR/current_lockscreen.png"
+  CURRENT_ID=$(python3 -c 'import json; d=json.load(open("'"$STATE_FILE"'")); print(d.get("current") or "")' 2>/dev/null || echo "")
+  if [[ -n "$CURRENT_ID" ]]; then
+    VIDEO_FILE="$CFG_DIR/library/$CURRENT_ID.mp4"
+    THUMB="$CFG_DIR/thumbnails/$CURRENT_ID.jpg"
+    if [[ ! -f "$LOCKSCREEN_IMG" || "$VIDEO_FILE" -nt "$LOCKSCREEN_IMG" ]]; then
+      if [[ -f "$VIDEO_FILE" ]]; then
+        ffmpeg -y -ss 00:00:01 -i "$VIDEO_FILE" -frames:v 1 -update 1 "$LOCKSCREEN_IMG" >/dev/null 2>&1 || {
+          [[ -f "$THUMB" ]] && cp -f "$THUMB" "$LOCKSCREEN_IMG" 2>/dev/null || true
+        }
+      elif [[ -f "$THUMB" ]]; then
+        cp -f "$THUMB" "$LOCKSCREEN_IMG" 2>/dev/null || true
+      fi
+    fi
+  fi
 else
   # 2. Modo estático: asegurar que wallmotion no compita y restaurar hyprpaper
   if pgrep -x mpvpaper >/dev/null 2>&1; then

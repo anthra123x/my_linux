@@ -54,4 +54,14 @@ if bar_running; then
   bar_running && pkill -f -- "qs -p $BAR"
 fi
 
-setsid env QML_IMPORT_PATH="$QML_IMPORT_PATH" uwsm app -- qs -p "$BAR" >/dev/null 2>&1 &
+if command -v uwsm >/dev/null 2>&1 && uwsm check may-start >/dev/null 2>&1; then
+  setsid env QML_IMPORT_PATH="$QML_IMPORT_PATH" uwsm app -- qs -p "$BAR" >/dev/null 2>&1 &
+elif command -v systemd-run >/dev/null 2>&1; then
+  systemctl --user reset-failed quickshell-bar >/dev/null 2>&1 || true
+  systemctl --user stop quickshell-bar >/dev/null 2>&1 || true
+  systemd-run --user --unit=quickshell-bar env QML_IMPORT_PATH="$QML_IMPORT_PATH" qs -p "$BAR" >/dev/null 2>&1 || {
+    nohup env QML_IMPORT_PATH="$QML_IMPORT_PATH" qs -p "$BAR" >/dev/null 2>&1 &
+  }
+else
+  nohup env QML_IMPORT_PATH="$QML_IMPORT_PATH" qs -p "$BAR" >/dev/null 2>&1 &
+fi
