@@ -56,7 +56,8 @@ cat << 'EOF' > "$SYSCTL_CONF"
 #
 # swappiness=150: con ZRAM de 12 GB, el kernel mantiene la memoria caliente en
 # RAM comprimida de ultra-baja latencia sin tocar el NVMe.
-vm.vfs_cache_pressure = 75
+# vfs_cache_pressure=50: retiene metadatos de archivos y binarios en memoria para acelerar lanzamientos de apps.
+vm.vfs_cache_pressure = 50
 vm.min_free_kbytes = 65536
 vm.swappiness = 150
 vm.page-cluster = 0
@@ -110,8 +111,19 @@ if [ -f "$PSM" ]; then
   ok "power-state-manager actualizado: GPU min 200 MHz, fan ASUS equilibrado, EPP balance_performance"
 fi
 
-# 5. Re-aplicar estado energetico actual
-log "5/5  Reaplicando perfil de energia activo..."
+# 5. Configurar I/O Scheduler y Read-Ahead para NVMe
+log "5/6  Configurando I/O Scheduler y Read-Ahead para almacenamiento NVMe..."
+cat << 'EOF' > /etc/udev/rules.d/99-local-iosched.rules
+# I/O Scheduler y Read-Ahead ultrarrápido para NVMe PCIe en Omicron DE
+ACTION=="add|change", KERNEL=="nvme[0-9]*n[0-9]*", ATTR{queue/rotational}=="0", \
+    ATTR{queue/scheduler}="none", ATTR{queue/read_ahead_kb}="1024"
+EOF
+udevadm control --reload >/dev/null 2>&1 || true
+udevadm trigger --subsystem-match=block >/dev/null 2>&1 || true
+ok "NVMe read-ahead configurado a 1024 KB con scheduler none"
+
+# 6. Re-aplicar estado energetico actual
+log "6/6  Reaplicando perfil de energia activo..."
 if [ -x "$PSM" ]; then
   "$PSM" apply >/dev/null 2>&1 || true
 fi

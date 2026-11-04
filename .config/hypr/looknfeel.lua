@@ -35,7 +35,7 @@ hl.config({
   },
   misc = {
     vrr = 0, -- Tasa fija a 60Hz sin fluctuaciones de refresco
-    render_unfocused_fps = 15, -- Ventanas sin foco limitadas a 15 FPS para reducir consumo en segundo plano
+    render_unfocused_fps = 60, -- Tasa de refresco constante a 60 FPS para eliminar retrasos al alternar ventanas
   },
 })
 
