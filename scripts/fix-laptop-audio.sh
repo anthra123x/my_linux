@@ -52,13 +52,33 @@ if command -v amixer >/dev/null 2>&1; then
         && log "amplificador Speaker: ${AMP_PCT}% unmute"
 fi
 
-# 3) Altavoces internos como salida por defecto.
+# 3) Altavoces internos como salida por defecto (solo si no hay bluetooth activo).
 if pactl list sinks 2>/dev/null | grep -q "$SINK"; then
     pactl set-sink-mute "$SINK" 0 >/dev/null 2>&1
     pactl set-sink-volume "$SINK" "$VOL_PCT"% >/dev/null 2>&1
-    pactl set-default-sink "$SINK" >/dev/null 2>&1
-    log "salida por defecto: $(pactl get-default-sink 2>/dev/null || echo '?')"
+    if ! pactl get-default-sink 2>/dev/null | grep -q "bluez"; then
+        pactl set-default-sink "$SINK" >/dev/null 2>&1
+        log "salida por defecto: $(pactl get-default-sink 2>/dev/null || echo '?')"
+    else
+        log "manteniendo salida bluetooth activa: $(pactl get-default-sink 2>/dev/null || echo '?')"
+    fi
 else
     log "sink $SINK no disponible"
     exit 1
+fi
+
+# 4) Calibrar microfono interno digital (DMIC)
+MIC_SOURCE="alsa_input.pci-0000_00_1f.3-platform-skl_hda_dsp_generic.HiFi__Mic1__source"
+if pactl list sources 2>/dev/null | grep -q "$MIC_SOURCE"; then
+    pactl set-source-mute "$MIC_SOURCE" 0 >/dev/null 2>&1 || true
+    pactl set-source-volume "$MIC_SOURCE" 85% >/dev/null 2>&1 || true
+    if ! pactl get-default-source 2>/dev/null | grep -q "bluez"; then
+        pactl set-default-source "$MIC_SOURCE" >/dev/null 2>&1 || true
+        log "fuente por defecto: $(pactl get-default-source 2>/dev/null || echo '?')"
+    fi
+fi
+if command -v amixer >/dev/null 2>&1; then
+    amixer -c 0 cset numid=41 55,55 >/dev/null 2>&1 || true # Dmic0 Capture Volume
+    amixer -c 0 cset numid=42 on >/dev/null 2>&1 || true    # Dmic0 Capture Switch
+    log "microfono DMIC calibrado (85%, +5dB)"
 fi
