@@ -299,6 +299,13 @@ if [ "$DO_CONFIG" = true ]; then
         log_ok "Scripts ejecutables instalados en ~/.local/bin."
     fi
 
+    # 2.4 Desplegar .local/share/hyprsimple
+    if [ -d "$REPO_DIR/.local/share/hyprsimple" ]; then
+        log_info "Instalando suite Quickshell en ~/.local/share/hyprsimple..."
+        install_file_item "$REPO_DIR/.local/share/hyprsimple/default/quickshell" "$HOME/.local/share/hyprsimple/default/quickshell"
+        log_ok "Suite Quickshell sincronizada."
+    fi
+
     # Asegurar libreria y thumbs de wallmotion
     mkdir -p "$HOME/.config/wallmotion/library" "$HOME/.config/wallmotion/thumbs"
     if [ -d "$REPO_DIR/.config/wallmotion/library" ]; then

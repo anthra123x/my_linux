@@ -105,9 +105,12 @@ sync_folder "$HOME/.config/xsettingsd" "$REPO_DIR/.config/xsettingsd"
 sync_folder "$HOME/.config/fontconfig" "$REPO_DIR/.config/fontconfig"
 sync_folder "$HOME/.config/mpv" "$REPO_DIR/.config/mpv"
 sync_folder "$HOME/.config/mpvpaper" "$REPO_DIR/.config/mpvpaper"
-sync_folder "$HOME/.config/wallmotion" "$REPO_DIR/.config/wallmotion" --exclude="*.log" --exclude="*.sock" --exclude=".descarga" --exclude="stock_backup"
+sync_folder "$HOME/.config/wallmotion" "$REPO_DIR/.config/wallmotion" --exclude=".git" --exclude="*.log" --exclude="*.sock" --exclude=".descarga" --exclude="stock_backup"
 sync_folder "$HOME/.config/micro" "$REPO_DIR/.config/micro" --exclude="syntax"
 sync_folder "$HOME/.config/systemd/user" "$REPO_DIR/.config/systemd/user" --exclude="plasma-*.service" --exclude="*.wants"
+
+# Quickshell / Hyprsimple
+sync_folder "$HOME/.local/share/hyprsimple/default/quickshell" "$REPO_DIR/.local/share/hyprsimple/default/quickshell" --exclude=".git" --exclude="*.log" --exclude="*.sock"
 
 # Ficheros individuales en ~/.config
 for f in "$HOME/.config"/*-flags.conf "$HOME/.config/starship.toml" "$HOME/.config/user-dirs.dirs" "$HOME/.config/mimeapps.list"; do
