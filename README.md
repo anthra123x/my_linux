@@ -29,13 +29,25 @@ El proyecto evoluciona desde una configuracion base hacia una **Shell reactiva y
 ### Escritorio Principal (Fondo Animado y Barra Quickshell)
 ![Escritorio](assets/desktop-clean.png)
 
-### Terminal con Fastfetch y Starship Prompt
-![Terminal](assets/desktop-terminal.png)
+### Mini Reproductor Multimedia Glassmorphic
+![Mini Reproductor](assets/desktop-media.png)
+
+### Gestor de Tareas y Procesos en Segundo Plano
+![Gestor de Tareas](assets/desktop-tasks.png)
+
+### Lanzador Lateral de Aplicaciones
+![Lanzador de Aplicaciones](assets/desktop-launcher.png)
 
 ### Selector Visual de Fondos Animados (Quickshell Carousel)
 ![Selector de Fondos Animados](assets/desktop-wallpapers.png)
 
-### Aplicaciones y Diseno de Ventanas
+### Centro de Metricas del Sistema y Rendimiento
+![Monitor de Sistema](assets/desktop-system.png)
+
+### Terminal con Fastfetch y Starship Prompt
+![Terminal](assets/desktop-terminal.png)
+
+### Gestion de Ventanas en Mosaico (Hyprland Tiling)
 ![Aplicaciones](assets/desktop-apps.png)
 
 ---
@@ -113,6 +125,7 @@ graph TD
 | **Lanzador de Apps** | Fuzzel | `.config/fuzzel/` | Menu de aplicaciones Wayland de arranque instantaneo. |
 | **Menu de Salida** | Wlogout | `.config/wlogout/` | Gestion de sesion, bloqueo y apagado. |
 | **Servicios de Usuario** | Systemd User Units | `.config/systemd/user/` | Orquestacion de ciclo de vida de demonios de usuario. |
+| **Audio DSP y Filtros** | PipeWire Filter-Chain | `.config/pipewire/` | Procesamiento acustico en tiempo real con smart filter WirePlumber para altavoces de la laptop. |
 | **Scripts de Soporte** | Herramientas auxiliares | `scripts/` | Utilidades de audio, brillo, wifi y automatizacion. |
 
 ---
