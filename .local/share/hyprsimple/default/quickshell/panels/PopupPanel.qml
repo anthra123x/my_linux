@@ -42,8 +42,9 @@ PanelWindow {
         target: panel
         property: "progress"
         to: 0
-        duration: 180
-        easing.type: Easing.OutCubic
+        duration: Theme.closeAnim
+        easing.type: Easing.BezierSpline
+        easing.bezierCurve: Theme.closeCurve
     }
 
     // Exclusive focus takes the keyboard at once, but while it is held Hyprland sends every
@@ -195,7 +196,7 @@ PanelWindow {
                 y: Theme.lg
                 width: parent.width - 2 * Theme.lg
                 spacing: Theme.sm
-                opacity: Math.max(0, Math.min(1, panel.progress))
+                opacity: Math.max(0, Math.min(1, Math.pow(panel.progress, 1.35)))
             }
         }
     }

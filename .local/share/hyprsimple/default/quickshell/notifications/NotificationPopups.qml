@@ -119,7 +119,8 @@ PanelWindow {
                             property: "shown"
                             to: 0
                             duration: Theme.closeAnim
-                            easing.type: Easing.InCubic
+                            easing.type: Easing.BezierSpline
+                            easing.bezierCurve: Theme.closeCurve
                         }
 
                         Connections {

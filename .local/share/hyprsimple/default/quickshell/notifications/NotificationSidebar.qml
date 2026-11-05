@@ -35,7 +35,8 @@ PanelWindow {
         property: "progress"
         to: 0
         duration: Theme.closeAnim
-        easing.type: Easing.InCubic
+        easing.type: Easing.BezierSpline
+        easing.bezierCurve: Theme.closeCurve
     }
 
     property bool focusPrimed: false

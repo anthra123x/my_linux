@@ -37,6 +37,7 @@ Provee la suite de interfaz de usuario de escritorio en Wayland mediante Quicksh
 - En MprisPlayer el metodo de conmutacion es togglePlaying() y no playPause().
 - Las direcciones de ventana de Hyprland requieren el prefijo address:0x<addr> para los dispatchers focuswindow y closewindow.
 - PopupPanel realiza un anclaje automatico centrado bajo el boton disparador, limitando la posicion a los bordes de la pantalla (edge clamp).
+- Animacion de cierre unificada mediante Theme.closeAnim (270ms) y Theme.closeCurve ([0.38, 0.0, 0.20, 1.0, 1, 1]) con desvanecimiento no lineal de opacidad para una retraccion suave y amortiguada.
 
 ## 6. Como Verificar
 - Validacion de sintaxis QML:
@@ -46,3 +47,4 @@ Provee la suite de interfaz de usuario de escritorio en Wayland mediante Quicksh
 - Prueba de despliegue via IPC:
   qs -p ~/.local/share/hyprsimple/default/quickshell ipc call bar toggle media
   qs -p ~/.local/share/hyprsimple/default/quickshell ipc call bar toggle tasks
+
