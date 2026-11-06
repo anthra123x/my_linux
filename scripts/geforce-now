@@ -7,6 +7,9 @@ URL="https://play.geforcenow.com"
 # Selector de proveedor o servicio directo
 for arg in "$@"; do
   case "$arg" in
+    --digevo)
+      URL="https://geforcenow.digevo.com"
+      ;;
     --abya)
       URL="https://abya.gfn.am"
       ;;

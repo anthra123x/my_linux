@@ -119,8 +119,9 @@ El módulo garantiza que las actualizaciones del sistema operativo (kernel, pacm
   - WebRTC con control de congestión BBR de baja latencia (`WebRtcHideLocalIpsWithMdns`).
   - Prioridad de proceso en tiempo real asignada por `ananicy-cpp` (`nice: -5`).
 - **Opciones de Línea de Comandos:**
-  - `geforce-now`: Acceso directo al clúster oficial NVIDIA (`https://play.geforcenow.com`), enrutando al nodo más cercano (US-South / US-Southeast, ~45-65ms RTT).
-  - `geforce-now --abya`: Conexión al partner oficial de NVIDIA para Sudamérica (`https://abya.gfn.am`).
+  - `geforce-now`: Acceso al portal de juego en la nube (`https://play.geforcenow.com`).
+  - `geforce-now --digevo`: Conexión directa a DIGEVO Colombia (`https://geforcenow.digevo.com`), partner oficial de NVIDIA en la región con servidores locales.
+  - `geforce-now --abya`: Conexión al partner oficial para el Cono Sur (`https://abya.gfn.am`).
   - `geforce-now --xbox`: Acceso alternativo para Xbox Cloud Gaming (Fortnite gratuito).
 
 
