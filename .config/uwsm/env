@@ -10,7 +10,7 @@ export HYPRCURSOR_SIZE=24
 # Force all apps to use wayland
 export GDK_BACKEND="wayland,x11,*"
 export QT_QPA_PLATFORM="wayland;xcb"
-export QT_QPA_PLATFORMTHEME=hyprqt6engine
+export QT_QPA_PLATFORMTHEME=qt6ct
 export QT_STYLE_OVERRIDE="kvantum"
 export SDL_VIDEODRIVER="wayland,x11"
 export MOZ_ENABLE_WAYLAND=1
@@ -18,5 +18,9 @@ export ELECTRON_OZONE_PLATFORM_HINT=wayland
 export OZONE_PLATFORM=wayland
 
 # NVIDIA env vars are auto-appended by install.sh if GPU is detected
+
+# Memory limits for background tooling and compilation on 8GB systems
+export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--max-old-space-size=1536"
+export CARGO_BUILD_JOBS=4
 
 export TERMINAL=kitty

@@ -44,7 +44,7 @@ window_count() {
 
 hyprctl clients -j 2>/dev/null | jq -r '.[].address' 2>/dev/null | while read -r addr; do
   [[ -n $addr ]] || continue
-  hyprctl dispatch closewindow "address:$addr" >/dev/null 2>&1
+  hyprctl dispatch "hl.dsp.window.close({ address = '$addr' })" >/dev/null 2>&1 || hyprctl dispatch closewindow "address:$addr" >/dev/null 2>&1
 done
 
 waited=0

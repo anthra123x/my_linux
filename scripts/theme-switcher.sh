@@ -161,10 +161,34 @@ for gtk_dir in "$HOME/.config/gtk-3.0" "$HOME/.config/gtk-4.0"; do
 done
 
 # Icon theme (icons.theme = omarchy style, icon-theme = hyprsimple style)
+SELECTED_ICON_THEME=""
 if [[ -f "$THEME_PATH/icons.theme" ]]; then
-  gsettings set org.gnome.desktop.interface icon-theme "$(cat "$THEME_PATH/icons.theme")"
+  SELECTED_ICON_THEME="$(cat "$THEME_PATH/icons.theme")"
 elif [[ -f "$THEME_PATH/icon-theme" ]]; then
-  gsettings set org.gnome.desktop.interface icon-theme "$(cat "$THEME_PATH/icon-theme")"
+  SELECTED_ICON_THEME="$(cat "$THEME_PATH/icon-theme")"
+fi
+
+if [[ -n "$SELECTED_ICON_THEME" ]]; then
+  if [[ ! -d "/usr/share/icons/$SELECTED_ICON_THEME" && ! -d "$HOME/.local/share/icons/$SELECTED_ICON_THEME" && ! -d "$HOME/.icons/$SELECTED_ICON_THEME" ]]; then
+    SELECTED_ICON_THEME="breeze-dark"
+  fi
+  gsettings set org.gnome.desktop.interface icon-theme "$SELECTED_ICON_THEME"
+  for gtk_file in "$HOME/.config/gtk-3.0/settings.ini" "$HOME/.config/gtk-4.0/settings.ini"; do
+    if [[ -f "$gtk_file" ]]; then
+      if grep -q "^gtk-icon-theme-name=" "$gtk_file"; then
+        sed -i "s|^gtk-icon-theme-name=.*|gtk-icon-theme-name=$SELECTED_ICON_THEME|" "$gtk_file"
+      else
+        sed -i "/^\[Settings\]/a gtk-icon-theme-name=$SELECTED_ICON_THEME" "$gtk_file"
+      fi
+    fi
+  done
+  if [[ -f "$HOME/.config/xsettingsd/xsettingsd.conf" ]]; then
+    if grep -q "^Net/IconThemeName " "$HOME/.config/xsettingsd/xsettingsd.conf"; then
+      sed -i "s|^Net/IconThemeName .*|Net/IconThemeName \"$SELECTED_ICON_THEME\"|" "$HOME/.config/xsettingsd/xsettingsd.conf"
+    else
+      echo "Net/IconThemeName \"$SELECTED_ICON_THEME\"" >> "$HOME/.config/xsettingsd/xsettingsd.conf"
+    fi
+  fi
 fi
 
 # Replace one export in uwsm/env rather than appending another. The file is

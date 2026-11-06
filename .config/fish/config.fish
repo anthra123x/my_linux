@@ -50,3 +50,10 @@ set --export PATH $BUN_INSTALL/bin $PATH
 set -gx PATH "/home/omicron/.local/bin" $PATH
 
 fish_add_path /home/omicron/.spicetify
+
+
+# Memory and concurrency bounds for 8GB system stability
+set -gx CARGO_BUILD_JOBS 4
+if not set -q NODE_OPTIONS
+    set -gx NODE_OPTIONS "--max-old-space-size=1536"
+end
