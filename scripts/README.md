@@ -106,4 +106,22 @@ El módulo garantiza que las actualizaciones del sistema operativo (kernel, pacm
 - **Protección de audio en segundo plano:** Consulta periódicamente `pactl` para no reducir a `SCHED_IDLE` aplicaciones que estén reproduciendo sonido activamente (música o llamadas), evitando chasquidos o cortes.
 - **`apply-kernel-optimizations.sh`**: Script administrativo para desplegar Transparent Huge Pages en `madvise`, `vm.stat_interval=10` y perfil térmico en un solo paso.
 
+---
+
+## 7. Cliente GeForce NOW de Baja Latencia (`geforce-now`)
+- **Ruta destino:** `/home/omicron/dotfiles/scripts/geforce-now`
+- **Enlace simbólico:** `/home/omicron/.local/bin/geforce-now`
+- **Integración Desktop:** `~/.local/share/applications/geforcenow.desktop`
+- **Propósito:** Lanzador dedicado y optimizado para streaming de juegos en la nube en Colombia (`America/Bogota`), eliminando bloqueos regionales y sobrecarga de Electron mediante motor WebApp acelerado por hardware.
+- **Parámetros de Aceleración y Decodificación Hardware:**
+  - `LIBVA_DRIVER_NAME=iHD` y `MESA_LOADER_DRIVER_OVERRIDE=iris` para forzar decodificación por hardware Intel QuickSync/VA-API directa en el chip Alder Lake-N.
+  - `--ozone-platform=wayland` y `--use-gl=egl` para renderizado Wayland nativo con cero copias de memoria en buffer (`--enable-zero-copy`).
+  - WebRTC con control de congestión BBR de baja latencia (`WebRtcHideLocalIpsWithMdns`).
+  - Prioridad de proceso en tiempo real asignada por `ananicy-cpp` (`nice: -5`).
+- **Opciones de Línea de Comandos:**
+  - `geforce-now`: Acceso directo al clúster oficial NVIDIA (`https://play.geforcenow.com`), enrutando al nodo más cercano (US-South / US-Southeast, ~45-65ms RTT).
+  - `geforce-now --abya`: Conexión al partner oficial de NVIDIA para Sudamérica (`https://abya.gfn.am`).
+  - `geforce-now --xbox`: Acceso alternativo para Xbox Cloud Gaming (Fortnite gratuito).
+
+
 

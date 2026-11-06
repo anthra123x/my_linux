@@ -1,0 +1,41 @@
+#!/bin/bash
+# GeForce NOW Dedicated Standalone Launcher
+# Optimized for Wayland, Intel Alder Lake-N VA-API hardware decoding and lowest WebRTC latency.
+
+URL="https://play.geforcenow.com"
+
+# Selector de proveedor o servicio directo
+for arg in "$@"; do
+  case "$arg" in
+    --abya)
+      URL="https://abya.gfn.am"
+      ;;
+    --xbox|--fortnite-xbox)
+      URL="https://www.xbox.com/play/games/fortnite"
+      ;;
+  esac
+done
+
+PROFILE_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/geforcenow-app"
+mkdir -p "$PROFILE_DIR"
+
+export LIBVA_DRIVER_NAME=iHD
+export MESA_LOADER_DRIVER_OVERRIDE=iris
+
+exec /usr/bin/brave \
+  --app="$URL" \
+  --class="geforcenow" \
+  --user-data-dir="$PROFILE_DIR" \
+  --ozone-platform=wayland \
+  --enable-features=VaapiVideoDecodeLinuxGL,VaapiIgnoreDriverChecks,WebRtcHideLocalIpsWithMdns,OverlayScrollbar \
+  --use-gl=egl \
+  --enable-zero-copy \
+  --enable-gpu-rasterization \
+  --canvas-oop-rasterization \
+  --ignore-gpu-blocklist \
+  --disable-features=UseEcoQoSForBackgroundProcess,CalculateNativeWinOcclusion \
+  --disable-background-timer-throttling \
+  --disable-renderer-backgrounding \
+  --autoplay-policy=no-user-gesture-required \
+  --password-store=basic \
+  "$@"
