@@ -53,7 +53,19 @@ Singleton {
     // An image the sender attached wins over its icon. An icon is a path or a theme name.
     function pictureOf(notification) {
         if (notification.image) return notification.image
-        const icon = notification.appIcon
+        let icon = notification.appIcon
+        if (!icon && notification.appName) {
+            const name = notification.appName.toLowerCase().trim()
+            if (name.includes("spotify")) icon = "spotify"
+            else if (name.includes("discord")) icon = "discord"
+            else if (name.includes("brave")) icon = "brave-desktop"
+            else if (name.includes("firefox")) icon = "firefox"
+            else if (name.includes("steam")) icon = "steam"
+            else if (name.includes("antigravity")) icon = "antigravity-ide"
+            else icon = name
+        } else if (icon === "brave-browser" || icon === "brave") {
+            icon = "brave-desktop"
+        }
         if (!icon) return ""
         return icon.startsWith("/") || icon.includes("://") ? icon : Quickshell.iconPath(icon, true)
     }

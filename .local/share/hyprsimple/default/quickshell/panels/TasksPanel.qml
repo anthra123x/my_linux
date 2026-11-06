@@ -11,7 +11,35 @@ PopupPanel {
 
     panelWidth: 420
 
-    readonly property var toplevels: Hyprland.toplevels.values
+    function isValidToplevel(tl) {
+        if (!tl) return false
+        if (tl.lastIpcObject) {
+            if (tl.lastIpcObject.mapped === false) return false
+            if (tl.lastIpcObject.hidden === true) return false
+            const ipcClass = (tl.lastIpcObject.class || "").toLowerCase()
+            const ipcInitialClass = (tl.lastIpcObject.initialClass || "").toLowerCase()
+            const ipcTitle = (tl.lastIpcObject.title || "").trim()
+            if (!ipcTitle || ipcTitle === "Default IME" || ipcTitle.startsWith("Default IME")) return false
+            if (ipcTitle === "SteamVR Status" || ipcTitle.startsWith("SteamVR")) return false
+            if (ipcClass === "wine" || ipcInitialClass === "wine") return false
+        }
+
+        const title = (tl.title || (tl.lastIpcObject && tl.lastIpcObject.title) || "").trim()
+        if (!title) return false
+        if (title === "Default IME" || title.startsWith("Default IME")) return false
+        if (title === "SteamVR Status" || title.startsWith("SteamVR")) return false
+
+        const wsId = tl.workspace ? tl.workspace.id : (tl.lastIpcObject && tl.lastIpcObject.workspace ? tl.lastIpcObject.workspace.id : null)
+        if (wsId === undefined || wsId === null || wsId <= 0) return false
+
+        return true
+    }
+
+    readonly property var toplevels: {
+        const raw = Hyprland.toplevels.values
+        if (!raw) return []
+        return raw.filter(isValidToplevel)
+    }
     readonly property int totalCount: toplevels ? toplevels.length : 0
     property bool confirmingCloseAll: false
 
@@ -19,6 +47,92 @@ PopupPanel {
         id: resetConfirmTimer
         interval: 3500
         onTriggered: root.confirmingCloseAll = false
+    }
+
+    function getAppClass(tl) {
+        if (!tl) return ""
+        if (tl.wayland && tl.wayland.appId && tl.wayland.appId.length > 0) {
+            return tl.wayland.appId.toLowerCase()
+        }
+        if (tl.lastIpcObject) {
+            if (tl.lastIpcObject.class && tl.lastIpcObject.class.length > 0) {
+                return tl.lastIpcObject.class.toLowerCase()
+            }
+            if (tl.lastIpcObject.initialClass && tl.lastIpcObject.initialClass.length > 0) {
+                return tl.lastIpcObject.initialClass.toLowerCase()
+            }
+        }
+        const title = (tl.title || (tl.lastIpcObject && tl.lastIpcObject.title) || "").toLowerCase()
+        if (title.includes("discord")) return "discord"
+        if (title.includes("spotify")) return "spotify"
+        if (title.includes("brave")) return "brave-browser"
+        if (title.includes("firefox")) return "firefox"
+        if (title.includes("chrome")) return "google-chrome"
+        if (title.includes("antigravity")) return "antigravity-ide"
+        if (title.includes("steam")) return "steam"
+        if (title.includes("kitty")) return "kitty"
+        if (title.includes("ghostty")) return "ghostty"
+        if (title.includes("alacritty")) return "alacritty"
+        if (title.includes("code")) return "code"
+        if (title.includes("pseint")) return "pseint"
+        return ""
+    }
+
+    function getAppIcon(tl) {
+        const cls = getAppClass(tl)
+        if (!cls) return ""
+
+        let icon = Quickshell.iconPath(cls, true)
+        if (icon) return icon
+
+        if (cls.includes("brave")) {
+            icon = Quickshell.iconPath("brave-browser", true) || Quickshell.iconPath("brave-desktop", true)
+            if (icon) return icon
+        }
+        if (cls.includes("antigravity")) {
+            icon = Quickshell.iconPath("antigravity-ide", true) || Quickshell.iconPath("antigravity", true)
+            if (icon) return icon
+        }
+        if (cls.includes("discord")) {
+            icon = Quickshell.iconPath("discord", true)
+            if (icon) return icon
+        }
+        if (cls.includes("spotify")) {
+            icon = Quickshell.iconPath("spotify", true)
+            if (icon) return icon
+        }
+        if (cls.includes("code")) {
+            icon = Quickshell.iconPath("code", true) || Quickshell.iconPath("visual-studio-code", true)
+            if (icon) return icon
+        }
+        if (cls.includes("terminal") || cls.includes("kitty") || cls.includes("ghostty")) {
+            icon = Quickshell.iconPath("utilities-terminal", true) || Quickshell.iconPath("terminal", true)
+            if (icon) return icon
+        }
+
+        return ""
+    }
+
+    function closeWindow(tl) {
+        if (!tl) return
+        const rawAddr = tl.address || (tl.lastIpcObject && tl.lastIpcObject.address) || ""
+        const addr = rawAddr.startsWith("0x") ? rawAddr : ("0x" + rawAddr)
+        Hyprland.dispatch("hl.dsp.window.close({ address = '" + addr + "' })")
+        Hyprland.dispatch("closewindow address:" + addr)
+        if (tl.wayland && typeof tl.wayland.close === "function") {
+            tl.wayland.close()
+        }
+    }
+
+    function focusWindow(tl) {
+        if (!tl) return
+        const rawAddr = tl.address || (tl.lastIpcObject && tl.lastIpcObject.address) || ""
+        const addr = rawAddr.startsWith("0x") ? rawAddr : ("0x" + rawAddr)
+        Hyprland.dispatch("hl.dsp.focus({ window = 'address:" + addr + "' })")
+        Hyprland.dispatch("focuswindow address:" + addr)
+        if (tl.wayland && typeof tl.wayland.activate === "function") {
+            tl.wayland.activate()
+        }
     }
 
     // Cierra todas las ventanas que no esten activas en foco
@@ -35,9 +149,8 @@ PopupPanel {
         if (!toplevels) return
         for (let i = 0; i < toplevels.length; i++) {
             const tl = toplevels[i]
-            if (!tl.activated && tl.address) {
-                const addr = tl.address.startsWith("0x") ? tl.address : ("0x" + tl.address)
-                Hyprland.dispatch("closewindow address:" + addr)
+            if (!tl.activated && (tl.address || (tl.lastIpcObject && tl.lastIpcObject.address))) {
+                root.closeWindow(tl)
             }
         }
     }
@@ -133,6 +246,9 @@ PopupPanel {
                     id: rowCard
                     required property var modelData
 
+                    readonly property string appClass: root.getAppClass(modelData)
+                    readonly property string appIconSrc: root.getAppIcon(modelData)
+
                     width: parent.width
                     height: 48
                     radius: 8
@@ -159,13 +275,23 @@ PopupPanel {
                             clip: true
 
                             Image {
+                                id: appImg
                                 anchors.centerIn: parent
                                 width: 22
                                 height: 22
                                 sourceSize: Qt.size(44, 44)
-                                source: Quickshell.iconPath(rowCard.modelData.lastIpcObject?.class || "", "application-x-executable")
+                                source: rowCard.appIconSrc
                                 fillMode: Image.PreserveAspectFit
                                 asynchronous: true
+                                visible: status === Image.Ready && rowCard.appIconSrc !== ""
+                            }
+
+                            Icon {
+                                anchors.centerIn: parent
+                                visible: !appImg.visible || rowCard.appIconSrc === ""
+                                text: "apps"
+                                font.pixelSize: 16
+                                color: Theme.barMuted
                             }
                         }
 
@@ -177,7 +303,7 @@ PopupPanel {
 
                             StyledText {
                                 Layout.fillWidth: true
-                                text: rowCard.modelData.title || rowCard.modelData.lastIpcObject?.initialTitle || "Ventana"
+                                text: rowCard.modelData.title || rowCard.modelData.lastIpcObject?.title || rowCard.modelData.lastIpcObject?.initialTitle || "Ventana"
                                 font.weight: rowCard.modelData.activated ? Font.Bold : Font.Normal
                                 font.pixelSize: Theme.fontSize
                                 color: rowCard.modelData.activated ? Theme.accent : Theme.barFg
@@ -197,7 +323,7 @@ PopupPanel {
                                     StyledText {
                                         id: wsLabel
                                         anchors.centerIn: parent
-                                        text: `WS ${rowCard.modelData.workspace?.id ?? "?"}`
+                                        text: `WS ${rowCard.modelData.workspace ? rowCard.modelData.workspace.id : (rowCard.modelData.lastIpcObject?.workspace?.id ?? "?")}`
                                         font.pixelSize: 9
                                         color: Theme.barFg
                                     }
@@ -205,7 +331,7 @@ PopupPanel {
 
                                 StyledText {
                                     anchors.verticalCenter: parent.verticalCenter
-                                    text: rowCard.modelData.lastIpcObject?.class || "app"
+                                    text: rowCard.appClass || "app"
                                     font.pixelSize: Theme.fontSizeSmall
                                     color: Theme.barMuted
                                     elide: Text.ElideRight
@@ -244,10 +370,7 @@ PopupPanel {
                                 anchors.fill: parent
                                 hoverEnabled: true
                                 cursorShape: Qt.PointingHandCursor
-                                onClicked: {
-                                    const addr = rowCard.modelData.address.startsWith("0x") ? rowCard.modelData.address : ("0x" + rowCard.modelData.address)
-                                    Hyprland.dispatch("closewindow address:" + addr)
-                                }
+                                onClicked: root.closeWindow(rowCard.modelData)
                             }
                         }
                     }
@@ -260,8 +383,7 @@ PopupPanel {
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
                         onClicked: {
-                            const addr = rowCard.modelData.address.startsWith("0x") ? rowCard.modelData.address : ("0x" + rowCard.modelData.address)
-                            Hyprland.dispatch("focuswindow address:" + addr)
+                            root.focusWindow(rowCard.modelData)
                             root.dismiss()
                         }
                     }

@@ -137,7 +137,7 @@ Rectangle {
                 width: 44
                 height: 44
                 anchors.top: parent.top
-                visible: root.picture !== "" && mediaImg.status !== Image.Error
+                visible: root.picture !== ""
 
                 Rectangle {
                     anchors.fill: parent
@@ -150,12 +150,20 @@ Rectangle {
                     Image {
                         id: mediaImg
                         anchors.fill: parent
-                        visible: root.picture !== ""
+                        visible: root.picture !== "" && status === Image.Ready
                         source: root.picture
                         sourceSize: Qt.size(88, 88)
                         fillMode: Image.PreserveAspectCrop
                         asynchronous: true
                         cache: false
+                    }
+
+                    Icon {
+                        anchors.centerIn: parent
+                        visible: !mediaImg.visible
+                        text: root.critical ? "warning" : "notifications"
+                        font.pixelSize: 20
+                        color: root.critical ? Theme.danger : Theme.barMuted
                     }
                 }
             }

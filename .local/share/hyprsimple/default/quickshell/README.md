@@ -12,9 +12,10 @@ Provee la suite de interfaz de usuario de escritorio en Wayland mediante Quicksh
   - Senales y metodos: togglePlaying(), next(), previous(), volume.
   - Propiedades: trackTitle, trackArtist, trackArtUrl, playbackState, position, length.
 - TasksButton.qml / TasksPanel.qml:
-  - Consumo de eventos Hyprland IPC mediante Quickshell.Hyprland (Hyprland.toplevels.values).
-  - Despachadores IPC: Hyprland.dispatch("focuswindow address:0x<addr>") y Hyprland.dispatch("closewindow address:0x<addr>").
+  - Consumo de eventos Hyprland IPC mediante Quickshell.Hyprland (Hyprland.toplevels.values) con filtrado de superficies invalidas/auxiliares.
+  - Despachadores IPC compatibles con Hyprland 0.57+ Lua (hl.dsp.window.close y hl.dsp.focus) con fallback clasico y control Wayland nativo.
   - Funcion: closeInactive() para depuracion quirurgica de ventanas secundarias.
+  - Renderizado resiliente de iconos de aplicacion con fallback a simbolos vectoriales en caso de texturas no cargadas.
 
 ## 3. Dependencias
 - quickshell (>= 0.0.10)
@@ -28,6 +29,8 @@ Provee la suite de interfaz de usuario de escritorio en Wayland mediante Quicksh
 - bar/StatusButton.qml -> Componente atomico de boton con icono, label y tooltip.
 - bar/MediaButton.qml -> Indicador y conmutador del mini reproductor multimedia.
 - bar/TasksButton.qml -> Contador y conmutador del gestor de aplicaciones en segundo plano.
+- notifications/NotificationCard.qml -> Tarjeta de notificacion con carga asincrona segura y fallback vectorial.
+- notifications/Notifications.qml -> Servicio y almacenamiento de notificaciones activas e historicas.
 - panels/PopupPanel.qml -> Ventana overlay con animacion de resorte, blur y mascara de clic exterior.
 - panels/MediaPanel.qml -> Panel de control multimedia con caratula, barra de progreso y volumen.
 - panels/TasksPanel.qml -> Panel gestor de ventanas abiertas con enfoque y cierre quirurgico.
@@ -35,7 +38,9 @@ Provee la suite de interfaz de usuario de escritorio en Wayland mediante Quicksh
 ## 5. Decisiones y Gotchas
 - Mpris.players es un UntypedObjectModel asincrono; se debe acceder a traves de Mpris.players.values.
 - En MprisPlayer el metodo de conmutacion es togglePlaying() y no playPause().
-- Las direcciones de ventana de Hyprland requieren el prefijo address:0x<addr> para los dispatchers focuswindow y closewindow.
+- En Hyprland 0.57+ con configuracion en Lua, Hyprland.dispatch evalua expresiones Lua (hl.dsp.window.close y hl.dsp.focus) en lugar de cadenas planas de socket antiguo.
+- Las superficies sin workspace asignado o ventanas auxiliares de IME (Default IME, SteamVR Status) se descartan del modelo visible para reflejar unicamente aplicaciones reales.
+- Las imagenes de iconos de aplicacion ocultan el elemento Image hasta que status === Image.Ready, evitando el patron de textura ausente (checkerboard) de Qt Quick ante fallos de tema o iconos inexistentes.
 - PopupPanel realiza un anclaje automatico centrado bajo el boton disparador, limitando la posicion a los bordes de la pantalla (edge clamp).
 - Animacion de cierre unificada mediante Theme.closeAnim (270ms) y Theme.closeCurve ([0.38, 0.0, 0.20, 1.0, 1, 1]) con desvanecimiento no lineal de opacidad para una retraccion suave y amortiguada.
 
@@ -47,4 +52,5 @@ Provee la suite de interfaz de usuario de escritorio en Wayland mediante Quicksh
 - Prueba de despliegue via IPC:
   qs -p ~/.local/share/hyprsimple/default/quickshell ipc call bar toggle media
   qs -p ~/.local/share/hyprsimple/default/quickshell ipc call bar toggle tasks
+
 
