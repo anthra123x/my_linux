@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Layouts
 import QtQuick.Effects
 import Quickshell
+import Quickshell.Io
 import Quickshell.Services.Mpris
 import qs.theme
 import qs.components
@@ -51,12 +52,37 @@ Rectangle {
         return Theme.accent
     }
 
+    // Color ambiental extraido directamente de la caratula de la cancion
+    property color coverAccent: playerAccent
+    Behavior on coverAccent { ColorAnimation { duration: 350 } }
+
+    Process {
+        id: colorExtractor
+        command: ["/home/omicron/.local/bin/dynamic-island-color.py", root.artUrl]
+        stdout: SplitParser {
+            onRead: data => {
+                const hex = data.trim()
+                if (hex.startsWith("#") && hex.length === 7) {
+                    root.coverAccent = hex
+                }
+            }
+        }
+    }
+
+    onArtUrlChanged: {
+        if (artUrl !== "") colorExtractor.running = true
+    }
+
+    Component.onCompleted: {
+        if (artUrl !== "") colorExtractor.running = true
+    }
+
     implicitHeight: Theme.capsule
     implicitWidth: mainRow.implicitWidth + 2 * Theme.md
     radius: height / 2
     color: root.active ? Theme.barSurface : Qt.alpha(Theme.barSurface, 0.95)
     border.width: 1
-    border.color: root.active ? root.playerAccent : (root.isPlaying ? Qt.alpha(root.playerAccent, 0.45) : Qt.alpha(Theme.barFg, 0.12))
+    border.color: root.active ? root.coverAccent : (root.isPlaying ? Qt.alpha(root.coverAccent, 0.45) : Qt.alpha(Theme.barFg, 0.12))
 
     // Se desvanece suavemente cuando la isla expandida toma el control
     opacity: bar.openPanel === "media" ? 0.0 : 1.0
@@ -146,7 +172,7 @@ Rectangle {
                     visible: !miniCover.visible
                     text: "music_note"
                     font.pixelSize: 12
-                    color: root.playerAccent
+                    color: root.coverAccent
                 }
 
                 Rectangle {
@@ -154,7 +180,7 @@ Rectangle {
                     radius: width / 2
                     color: "transparent"
                     border.width: 1
-                    border.color: Qt.alpha(root.playerAccent, 0.45)
+                    border.color: Qt.alpha(root.coverAccent, 0.45)
                 }
             }
 
@@ -183,7 +209,7 @@ Rectangle {
                     width: 2.5
                     height: 5
                     radius: 1.25
-                    color: root.playerAccent
+                    color: root.coverAccent
                     anchors.bottom: parent.bottom
                     SequentialAnimation on height {
                         running: root.isPlaying
@@ -196,7 +222,7 @@ Rectangle {
                     width: 2.5
                     height: 9
                     radius: 1.25
-                    color: root.playerAccent
+                    color: root.coverAccent
                     anchors.bottom: parent.bottom
                     SequentialAnimation on height {
                         running: root.isPlaying
@@ -209,7 +235,7 @@ Rectangle {
                     width: 2.5
                     height: 7
                     radius: 1.25
-                    color: root.playerAccent
+                    color: root.coverAccent
                     anchors.bottom: parent.bottom
                     SequentialAnimation on height {
                         running: root.isPlaying
@@ -222,7 +248,7 @@ Rectangle {
                     width: 2.5
                     height: 4
                     radius: 1.25
-                    color: root.playerAccent
+                    color: root.coverAccent
                     anchors.bottom: parent.bottom
                     SequentialAnimation on height {
                         running: root.isPlaying
