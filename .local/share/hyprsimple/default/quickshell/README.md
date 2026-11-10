@@ -51,13 +51,16 @@ Provee la suite de interfaz de usuario de escritorio en Wayland mediante Quicksh
 ## 6. Decisiones de Diseño y Gotchas
 - **Morfismo integrado sin desplazar ventanas**: `DynamicIslandExpanded` se implementa en un `PanelWindow` overlay con `exclusionMode: ExclusionMode.Ignore` y `margins.top: -Theme.barHeight`, permitiendo que la tarjeta se extienda desde y=3 px directamente sobre la barra sin obligar a Hyprland a reacomodar ventanas en mosaico.
 - **Caratulas circulares con MultiEffect**: En Qt Quick, la propiedad `clip: true` en un `Rectangle` unicamente recorta sobre el cuadro delimitador rectangular. Se incorporo `QtQuick.Effects` con `MultiEffect` y mascara de capa para renderizar carátulas estrictamente circulares tanto en modo compacto como expandido.
-- **Resplandor ambiental adaptativo**: Se implemento una capa de gradiente vertical y un foco radial inferior que absorben el color representativo del reproductor en ejecucion (Spotify `#1DB954`, Brave `#FF5500`, Firefox `#FF7139`, Chrome `#4285F4`, VLC `#FF8800`) en combinacion con la textura difuminada de la caratula activa.
+- **Resplandor ambiental adaptativo**: Se implemento una capa de gradiente vertical suave en la mitad inferior de la tarjeta que absorbe el color representativo del reproductor en ejecucion (Spotify `#1DB954`, Brave `#FF5500`, Firefox `#FF7139`, Chrome `#4285F4`, VLC `#FF8800`) sin formas geometricas cortadas ni artefactos visuales.
+- **Fondo solido antirreflejo**: La tarjeta de la isla utiliza un fondo solido negro azabache (`#0a0b0e`), evitando que el texto o ventanas de fondo se trasluzcan o contaminen la interfaz.
+- **Aceleracion de curva de animacion**: Se optimizo la duracion de expansion a 180ms y contraccion a 140ms bajo curva Bezier elastica `[0.1, 0.9, 0.2, 1.0]`, eliminando lentitud perceptible.
+- **Glifo de pausa geometrico**: Se sustituyo el glifo tipografico de pausa (susceptible a interpretarse visualmente como '00') por dos barras rectangulares negras redondeadas de precision milimetrica.
 
 ## 7. Estado y Ultimos Cambios
-- Implementacion de `DynamicIslandExpanded.qml`: morfismo fluido desde la isla central hacia abajo al estilo iPhone.
-- Estructura visual del reproductor segun la referencia: caratula circular izquierda, metadatos, badge interactivo de fuente con ecualizador, barra de desplazamiento con knob circular e indicadores de tiempo, boton hero central blanco solido con icono negro de pausa/reproduccion y controles de salto/repeticion/shuffle.
-- Color ambiental reactivo dependiente del reproductor MPRIS en foco.
-- Mascara circular acelerada por hardware con `MultiEffect` en `DynamicIsland.qml` y `DynamicIslandExpanded.qml`.
+- Refinamiento estetico integral segun la captura de referencia: fondo negro azabache 100% opaco, tipografia sans-serif moderna (`Noto Sans` / `Cantarell`) y scrubber horizontal unificado en una sola linea.
+- Aceleracion de animaciones a 180ms para respuesta inmediata tipo iOS.
+- Correccion del icono de pausa central con barras geometricas puras.
+- Reemplazo del resplandor eliptico cortado por un gradiente de iluminacion ambiental difusa.
 
 ## 8. Como Verificar
 1. Reiniciar Quickshell: `pkill qs && qs -d -p ~/.local/share/hyprsimple/default/quickshell`

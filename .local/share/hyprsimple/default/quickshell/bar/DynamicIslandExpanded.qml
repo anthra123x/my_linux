@@ -7,15 +7,13 @@ import Quickshell.Services.Mpris
 import qs.theme
 import qs.components
 
-// Isla dinamica expandida (Dynamic Island) con estetica Apple / iOS:
-// - Morfismo suave: Se expande fluidamente hacia abajo desde la barra conservando la posicion de la isla compacta.
-// - Reproductor de musica fiel a la referencia:
-//   * Caratula circular en la esquina superior izquierda.
-//   * Titulo y artista destacados en el encabezado.
-//   * Badge de fuente / accion interactivo a la derecha.
-//   * Barra de desplazamiento (scrubber) con tiempos transcurrido y restante.
-//   * Controles de reproduccion: Shuffle, Anterior, Boton circular blanco solido Play/Pause, Siguiente, Repetir.
-// - Atmosfera adaptativa: Resplandor ambiental y tonalidades sincronizadas con la fuente activa (Spotify verde, Brave naranja, etc.).
+// Isla dinamica expandida (Dynamic Island) estilo iOS:
+// - Despliegue ultrarrapido (180ms) con curva elastica tipo Apple.
+// - Fondo solido negro azabache (#0a0b0e) con iluminacion ambiental inferior difusa.
+// - Caratula circular con mascara acelerada por GPU (MultiEffect).
+// - Tipografia moderna sans-serif (Noto Sans / Cantarell) de alta definicion.
+// - Linea de tiempo horizontal unificada (tiempo transcurrido, barra y tiempo restante en una sola fila).
+// - Boton circular blanco solido con barras de pausa geometricas puras (evita fallos de fuentes tipo '00').
 PanelWindow {
     id: root
 
@@ -24,26 +22,26 @@ PanelWindow {
     readonly property bool open: bar.openPanel === "media"
     property real progress: 0.0
 
-    // Animacion de apertura con curva Bezier elastica tipo iOS
+    // Animacion de apertura ultrarrapida y elastica estilo iOS
     NumberAnimation {
         id: opening
         target: root
         property: "progress"
         to: 1.0
-        duration: 320
+        duration: 180
         easing.type: Easing.BezierSpline
-        easing.bezierCurve: [0.16, 1, 0.3, 1, 1, 1]
+        easing.bezierCurve: [0.1, 0.9, 0.2, 1.0]
     }
 
-    // Animacion de cierre rapida y precisa
+    // Animacion de cierre instantanea y limpia
     NumberAnimation {
         id: closing
         target: root
         property: "progress"
         to: 0.0
-        duration: 220
+        duration: 140
         easing.type: Easing.BezierSpline
-        easing.bezierCurve: [0.3, 0, 0.8, 0.15, 1, 1]
+        easing.bezierCurve: [0.25, 0.1, 0.25, 1.0]
     }
 
     onOpenChanged: {
@@ -73,7 +71,7 @@ PanelWindow {
 
     Region { id: noInput }
 
-    // Deteccion MPRIS y seleccion automatica del reproductor activo
+    // Deteccion MPRIS y seleccion reactiva de fuente
     readonly property var players: Mpris.players.values
     property int selectedIndex: -1
 
@@ -115,7 +113,7 @@ PanelWindow {
         return `${m}:${s < 10 ? "0" : ""}${s}`
     }
 
-    // Color ambiental adaptativo segun la identidad del reproductor activo
+    // Tono ambiental reactivo al reproductor
     readonly property color playerAccent: {
         const id = (activePlayer?.identity || "").toLowerCase()
         if (id.includes("spotify")) return "#1DB954"
@@ -128,7 +126,7 @@ PanelWindow {
         return Theme.accent
     }
 
-    // Area externa de descarte al hacer clic fuera de la isla
+    // Descarte al hacer clic fuera del rectangulo de la isla
     MouseArea {
         anchors.fill: parent
         enabled: root.open
@@ -136,16 +134,16 @@ PanelWindow {
         onClicked: root.dismiss()
     }
 
-    // Contenedor morfico de la tarjeta de la isla dinamica
+    // Contenedor de la tarjeta de la Dynamic Island
     Item {
         id: cardContainer
         anchors.horizontalCenter: parent.horizontalCenter
-        y: 3 // Alineado exactamente con el offset superior de la isla compacta en la barra
+        y: 3
 
         readonly property real compactWidth: (anchorItem && anchorItem.width > 0) ? anchorItem.width : 220
         readonly property real compactHeight: Theme.capsule
-        readonly property real expandedWidth: 420
-        readonly property real expandedHeight: 180
+        readonly property real expandedWidth: 380
+        readonly property real expandedHeight: 154
 
         width: compactWidth + (expandedWidth - compactWidth) * root.progress
         height: compactHeight + (expandedHeight - compactHeight) * root.progress
@@ -153,15 +151,15 @@ PanelWindow {
         Rectangle {
             id: card
             anchors.fill: parent
-            radius: 12 + (36 - 12) * root.progress
-            color: "#08080a"
+            radius: 12 + (32 - 12) * root.progress
+            color: "#0a0b0e" // Fondo 100% solido negro profundo para no transparentar ventanas
             border.width: 1
-            border.color: Qt.alpha(root.playerAccent, 0.32 * root.progress + 0.12)
+            border.color: Qt.alpha(root.playerAccent, 0.35 * root.progress + 0.10)
             clip: true
             focus: true
             Keys.onEscapePressed: root.dismiss()
 
-            // Soporte de rueda de raton para ajuste rapido de volumen en cualquier parte de la isla
+            // Soporte de rueda de raton para ajuste de volumen
             MouseArea {
                 anchors.fill: parent
                 acceptedButtons: Qt.AllButtons
@@ -172,66 +170,38 @@ PanelWindow {
                 }
             }
 
-            // Capa 1: Caratula desenfocada / textura ambiental de fondo
-            Image {
-                anchors.fill: parent
-                source: root.artUrl
-                fillMode: Image.PreserveAspectCrop
-                asynchronous: true
-                cache: true
-                opacity: 0.16 * root.progress
-                visible: root.hasArt && status === Image.Ready
-            }
-
-            // Capa 2: Degradado adaptativo vertical con el tono del reproductor
+            // Resplandor ambiental difuso inferior (sin formas geometricas cortadas)
             Rectangle {
                 anchors.fill: parent
                 opacity: root.progress
                 gradient: Gradient {
                     orientation: Gradient.Vertical
-                    GradientStop { position: 0.0; color: Qt.alpha("#050508", 0.75) }
-                    GradientStop { position: 0.50; color: Qt.alpha("#050508", 0.55) }
-                    GradientStop { position: 1.0; color: Qt.alpha(root.playerAccent, 0.34) }
+                    GradientStop { position: 0.0; color: "transparent" }
+                    GradientStop { position: 0.45; color: "transparent" }
+                    GradientStop { position: 0.80; color: Qt.alpha(root.playerAccent, 0.10) }
+                    GradientStop { position: 1.0; color: Qt.alpha(root.playerAccent, 0.28) }
                 }
             }
 
-            // Capa 3: Resplandor radial inferior (ambient spotlight)
-            Rectangle {
-                anchors.horizontalCenter: parent.horizontalCenter
-                anchors.bottom: parent.bottom
-                anchors.bottomMargin: -28
-                width: parent.width * 0.85
-                height: 85
-                radius: width / 2
-                color: Qt.alpha(root.playerAccent, 0.25 * root.progress)
-
-                SequentialAnimation on opacity {
-                    running: root.isPlaying && root.open
-                    loops: Animation.Infinite
-                    NumberAnimation { to: 0.60; duration: 1600; easing.type: Easing.InOutQuad }
-                    NumberAnimation { to: 1.0; duration: 1600; easing.type: Easing.InOutQuad }
-                }
-            }
-
-            // Capa 4: Contenido de la isla dinamica (fade-in gradual durante expansion)
+            // Contenido interior de la isla
             Column {
                 anchors.fill: parent
-                anchors.topMargin: 16
+                anchors.topMargin: 15
                 anchors.bottomMargin: 14
-                anchors.leftMargin: 20
-                anchors.rightMargin: 20
+                anchors.leftMargin: 18
+                anchors.rightMargin: 18
                 spacing: 12
-                opacity: Math.max(0.0, (root.progress - 0.22) / 0.78)
+                opacity: Math.min(1.0, root.progress * 1.6)
 
                 // --- 1. FILA SUPERIOR: Caratula circular + Titulo/Artista + Badge de fuente ---
                 RowLayout {
                     width: parent.width
-                    spacing: 14
+                    spacing: 12
 
-                    // Caratula circular (52x52, radio 26)
+                    // Caratula circular pura (46x46, radio 23)
                     Item {
-                        Layout.preferredWidth: 52
-                        Layout.preferredHeight: 52
+                        Layout.preferredWidth: 46
+                        Layout.preferredHeight: 46
 
                         Rectangle {
                             id: coverMask
@@ -260,17 +230,17 @@ PanelWindow {
                             anchors.centerIn: parent
                             visible: !expandedCover.visible
                             text: "music_note"
-                            font.pixelSize: 22
+                            font.pixelSize: 20
                             color: root.playerAccent
                         }
 
-                        // Anillo perimetral elegante
+                        // Anillo exterior suave
                         Rectangle {
                             anchors.fill: parent
                             radius: width / 2
                             color: "transparent"
                             border.width: 1
-                            border.color: Qt.alpha("#ffffff", 0.20)
+                            border.color: Qt.alpha("#ffffff", 0.18)
                         }
 
                         MouseArea {
@@ -282,20 +252,21 @@ PanelWindow {
                         }
 
                         scale: coverMouse.pressed ? 0.94 : (coverMouse.containsMouse ? 1.05 : 1.0)
-                        Behavior on scale { Anim { duration: 120 } }
+                        Behavior on scale { Anim { duration: 100 } }
                     }
 
-                    // Informacion de pista: Titulo en negrita y Artista
+                    // Informacion de pista: Tipografia limpia sans-serif (no monospace)
                     ColumnLayout {
                         Layout.fillWidth: true
                         Layout.alignment: Qt.AlignVCenter
-                        spacing: 3
+                        spacing: 2
 
                         StyledText {
                             Layout.fillWidth: true
                             text: root.title
+                            font.family: "Noto Sans, Cantarell, sans-serif"
                             font.bold: true
-                            font.pixelSize: 15
+                            font.pixelSize: 14
                             color: "#ffffff"
                             elide: Text.ElideRight
                         }
@@ -303,9 +274,10 @@ PanelWindow {
                         StyledText {
                             Layout.fillWidth: true
                             text: root.artist
-                            font.weight: Font.Medium
-                            font.pixelSize: 12
-                            color: Qt.alpha("#ffffff", 0.65)
+                            font.family: "Noto Sans, Cantarell, sans-serif"
+                            font.weight: Font.Normal
+                            font.pixelSize: 11
+                            color: Qt.alpha("#ffffff", 0.55)
                             elide: Text.ElideRight
                         }
                     }
@@ -313,12 +285,12 @@ PanelWindow {
                     // Badge de fuente interactivo con ecualizador animado
                     Rectangle {
                         id: badgeRect
-                        Layout.preferredWidth: 32
-                        Layout.preferredHeight: 32
-                        radius: 16
-                        color: Qt.alpha(root.playerAccent, 0.18)
+                        Layout.preferredWidth: 30
+                        Layout.preferredHeight: 30
+                        radius: 15
+                        color: Qt.alpha(root.playerAccent, 0.16)
                         border.width: 1
-                        border.color: Qt.alpha(root.playerAccent, 0.40)
+                        border.color: Qt.alpha(root.playerAccent, 0.35)
 
                         Row {
                             anchors.centerIn: parent
@@ -326,32 +298,32 @@ PanelWindow {
                             visible: root.isPlaying
 
                             Rectangle {
-                                width: 2.5; height: 6; radius: 1.25; color: root.playerAccent
+                                width: 2.2; height: 5; radius: 1.1; color: root.playerAccent
                                 anchors.bottom: parent.bottom
                                 SequentialAnimation on height {
                                     running: root.isPlaying && root.open
                                     loops: Animation.Infinite
-                                    NumberAnimation { to: 12; duration: 320; easing.type: Easing.InOutSine }
+                                    NumberAnimation { to: 11; duration: 320; easing.type: Easing.InOutSine }
                                     NumberAnimation { to: 4; duration: 360; easing.type: Easing.InOutSine }
                                 }
                             }
                             Rectangle {
-                                width: 2.5; height: 10; radius: 1.25; color: root.playerAccent
+                                width: 2.2; height: 9; radius: 1.1; color: root.playerAccent
                                 anchors.bottom: parent.bottom
                                 SequentialAnimation on height {
                                     running: root.isPlaying && root.open
                                     loops: Animation.Infinite
                                     NumberAnimation { to: 4; duration: 400; easing.type: Easing.InOutSine }
-                                    NumberAnimation { to: 13; duration: 340; easing.type: Easing.InOutSine }
+                                    NumberAnimation { to: 12; duration: 340; easing.type: Easing.InOutSine }
                                 }
                             }
                             Rectangle {
-                                width: 2.5; height: 7; radius: 1.25; color: root.playerAccent
+                                width: 2.2; height: 6; radius: 1.1; color: root.playerAccent
                                 anchors.bottom: parent.bottom
                                 SequentialAnimation on height {
                                     running: root.isPlaying && root.open
                                     loops: Animation.Infinite
-                                    NumberAnimation { to: 11; duration: 290; easing.type: Easing.InOutSine }
+                                    NumberAnimation { to: 10; duration: 290; easing.type: Easing.InOutSine }
                                     NumberAnimation { to: 5; duration: 420; easing.type: Easing.InOutSine }
                                 }
                             }
@@ -361,7 +333,7 @@ PanelWindow {
                             anchors.centerIn: parent
                             visible: !root.isPlaying
                             text: "play_arrow"
-                            font.pixelSize: 16
+                            font.pixelSize: 15
                             color: root.playerAccent
                         }
 
@@ -373,9 +345,6 @@ PanelWindow {
                             onClicked: root.nextPlayer()
                         }
 
-                        scale: badgeMouse.containsMouse ? 1.08 : 1.0
-                        Behavior on scale { Anim { duration: 120 } }
-
                         Tooltip {
                             target: badgeRect
                             text: root.players.length > 1
@@ -386,23 +355,31 @@ PanelWindow {
                     }
                 }
 
-                // --- 2. FILA MEDIA: Linea de tiempo (Scrubber) y tiempos numericos ---
-                Column {
+                // --- 2. FILA MEDIA: Linea de tiempo horizontal unificada ---
+                RowLayout {
                     width: parent.width
-                    spacing: 4
+                    spacing: 8
+
+                    StyledText {
+                        text: root.formatTime(root.activePlayer?.position)
+                        font.family: "Noto Sans, Cantarell, sans-serif"
+                        font.pixelSize: 10
+                        font.weight: Font.Medium
+                        color: Qt.alpha("#ffffff", 0.50)
+                    }
 
                     Item {
                         id: scrubber
-                        width: parent.width
+                        Layout.fillWidth: true
                         height: 16
 
                         Rectangle {
                             id: scrubberTrack
                             anchors.verticalCenter: parent.verticalCenter
                             width: parent.width
-                            height: 4
-                            radius: 2
-                            color: Qt.alpha("#ffffff", 0.20)
+                            height: 3
+                            radius: 1.5
+                            color: Qt.alpha("#ffffff", 0.18)
 
                             Rectangle {
                                 height: parent.height
@@ -412,16 +389,16 @@ PanelWindow {
                             }
                         }
 
-                        // Manija circular blanca (Thumb knob)
+                        // Knob circular blanco
                         Rectangle {
                             anchors.verticalCenter: parent.verticalCenter
                             x: Math.max(0, Math.min(scrubber.width - width, (scrubber.width * root.progressFraction) - (width / 2)))
-                            width: scrubMouse.containsMouse || scrubMouse.pressed ? 12 : 9
+                            width: scrubMouse.containsMouse || scrubMouse.pressed ? 10 : 8
                             height: width
                             radius: width / 2
                             color: "#ffffff"
                             scale: scrubMouse.pressed ? 1.25 : 1.0
-                            Behavior on scale { Anim { duration: 100 } }
+                            Behavior on scale { Anim { duration: 80 } }
                         }
 
                         MouseArea {
@@ -443,48 +420,33 @@ PanelWindow {
                         }
                     }
 
-                    // Tiempos transcurrido y restante
-                    RowLayout {
-                        width: parent.width
-
-                        StyledText {
-                            text: root.formatTime(root.activePlayer?.position)
-                            font.family: Theme.font
-                            font.pixelSize: 11
-                            font.weight: Font.Medium
-                            color: Qt.alpha("#ffffff", 0.60)
-                        }
-
-                        Item { Layout.fillWidth: true }
-
-                        StyledText {
-                            text: "-" + root.formatTime((root.activePlayer?.length ?? 0) - (root.activePlayer?.position ?? 0))
-                            font.family: Theme.font
-                            font.pixelSize: 11
-                            font.weight: Font.Medium
-                            color: Qt.alpha("#ffffff", 0.60)
-                        }
+                    StyledText {
+                        text: "-" + root.formatTime((root.activePlayer?.length ?? 0) - (root.activePlayer?.position ?? 0))
+                        font.family: "Noto Sans, Cantarell, sans-serif"
+                        font.pixelSize: 10
+                        font.weight: Font.Medium
+                        color: Qt.alpha("#ffffff", 0.50)
                     }
                 }
 
                 // --- 3. FILA INFERIOR: Controles de reproduccion ---
                 Row {
                     anchors.horizontalCenter: parent.horizontalCenter
-                    spacing: 26
+                    spacing: 28
 
                     // Shuffle
                     Rectangle {
-                        width: 32
-                        height: 32
-                        radius: 16
+                        width: 30
+                        height: 30
+                        radius: 15
                         anchors.verticalCenter: parent.verticalCenter
                         color: shuffleHover.containsMouse ? Qt.alpha("#ffffff", 0.10) : "transparent"
 
                         Icon {
                             anchors.centerIn: parent
                             text: "shuffle"
-                            font.pixelSize: 20
-                            color: root.activePlayer?.shuffle ? root.playerAccent : Qt.alpha("#ffffff", 0.60)
+                            font.pixelSize: 17
+                            color: root.activePlayer?.shuffle ? root.playerAccent : Qt.alpha("#ffffff", 0.50)
                         }
 
                         MouseArea {
@@ -502,19 +464,19 @@ PanelWindow {
 
                     // Pista Anterior
                     Rectangle {
-                        width: 36
-                        height: 36
-                        radius: 18
+                        width: 34
+                        height: 34
+                        radius: 17
                         anchors.verticalCenter: parent.verticalCenter
-                        color: prevHover.pressed ? Qt.alpha("#ffffff", 0.20) : (prevHover.containsMouse ? Qt.alpha("#ffffff", 0.10) : "transparent")
+                        color: prevHover.pressed ? Qt.alpha("#ffffff", 0.18) : (prevHover.containsMouse ? Qt.alpha("#ffffff", 0.08) : "transparent")
                         scale: prevHover.pressed ? 0.90 : (prevHover.containsMouse ? 1.08 : 1.0)
-                        Behavior on scale { Anim { duration: 100 } }
+                        Behavior on scale { Anim { duration: 80 } }
 
                         Icon {
                             anchors.centerIn: parent
                             text: "skip_previous"
-                            font.pixelSize: 26
-                            color: root.activePlayer?.canGoPrevious ? "#ffffff" : Qt.alpha("#ffffff", 0.40)
+                            font.pixelSize: 24
+                            color: root.activePlayer?.canGoPrevious ? "#ffffff" : Qt.alpha("#ffffff", 0.35)
                         }
 
                         MouseArea {
@@ -527,20 +489,43 @@ PanelWindow {
                         }
                     }
 
-                    // Boton Hero Central: Circulo blanco solido con icono negro de Play/Pausa
+                    // Boton Hero Central: Circulo blanco solido con barras de pausa geometricas puras (aspecto iOS autentico)
                     Rectangle {
-                        width: 46
-                        height: 46
-                        radius: 23
+                        width: 42
+                        height: 42
+                        radius: 21
                         anchors.verticalCenter: parent.verticalCenter
                         color: "#ffffff"
-                        scale: playHover.pressed ? 0.92 : (playHover.containsMouse ? 1.06 : 1.0)
-                        Behavior on scale { Anim { duration: 120 } }
+                        scale: playHover.pressed ? 0.92 : (playHover.containsMouse ? 1.05 : 1.0)
+                        Behavior on scale { Anim { duration: 100 } }
 
+                        // Barras de pausa geometricas puras (garantiza aspecto iOS, nunca '00')
+                        Row {
+                            anchors.centerIn: parent
+                            spacing: 4
+                            visible: root.isPlaying
+
+                            Rectangle {
+                                width: 3.5
+                                height: 14
+                                radius: 1.5
+                                color: "#000000"
+                            }
+                            Rectangle {
+                                width: 3.5
+                                height: 14
+                                radius: 1.5
+                                color: "#000000"
+                            }
+                        }
+
+                        // Icono de play centrado opticamente
                         Icon {
                             anchors.centerIn: parent
-                            text: root.isPlaying ? "pause" : "play_arrow"
-                            font.pixelSize: 28
+                            anchors.horizontalCenterOffset: 1
+                            visible: !root.isPlaying
+                            text: "play_arrow"
+                            font.pixelSize: 24
                             color: "#000000"
                         }
 
@@ -555,19 +540,19 @@ PanelWindow {
 
                     // Pista Siguiente
                     Rectangle {
-                        width: 36
-                        height: 36
-                        radius: 18
+                        width: 34
+                        height: 34
+                        radius: 17
                         anchors.verticalCenter: parent.verticalCenter
-                        color: nextHover.pressed ? Qt.alpha("#ffffff", 0.20) : (nextHover.containsMouse ? Qt.alpha("#ffffff", 0.10) : "transparent")
+                        color: nextHover.pressed ? Qt.alpha("#ffffff", 0.18) : (nextHover.containsMouse ? Qt.alpha("#ffffff", 0.08) : "transparent")
                         scale: nextHover.pressed ? 0.90 : (nextHover.containsMouse ? 1.08 : 1.0)
-                        Behavior on scale { Anim { duration: 100 } }
+                        Behavior on scale { Anim { duration: 80 } }
 
                         Icon {
                             anchors.centerIn: parent
                             text: "skip_next"
-                            font.pixelSize: 26
-                            color: root.activePlayer?.canGoNext ? "#ffffff" : Qt.alpha("#ffffff", 0.40)
+                            font.pixelSize: 24
+                            color: root.activePlayer?.canGoNext ? "#ffffff" : Qt.alpha("#ffffff", 0.35)
                         }
 
                         MouseArea {
@@ -580,19 +565,19 @@ PanelWindow {
                         }
                     }
 
-                    // Repetir / Bucle
+                    // Repetir
                     Rectangle {
-                        width: 32
-                        height: 32
-                        radius: 16
+                        width: 30
+                        height: 30
+                        radius: 15
                         anchors.verticalCenter: parent.verticalCenter
                         color: repeatHover.containsMouse ? Qt.alpha("#ffffff", 0.10) : "transparent"
 
                         Icon {
                             anchors.centerIn: parent
                             text: root.activePlayer?.loopState === MprisLoopState.Track ? "repeat_one" : "repeat"
-                            font.pixelSize: 20
-                            color: root.activePlayer?.loopState !== MprisLoopState.None ? root.playerAccent : Qt.alpha("#ffffff", 0.60)
+                            font.pixelSize: 17
+                            color: root.activePlayer?.loopState !== MprisLoopState.None ? root.playerAccent : Qt.alpha("#ffffff", 0.50)
                         }
 
                         MouseArea {

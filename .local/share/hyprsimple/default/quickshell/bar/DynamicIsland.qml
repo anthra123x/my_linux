@@ -60,13 +60,13 @@ Rectangle {
 
     // Se desvanece suavemente cuando la isla expandida toma el control
     opacity: bar.openPanel === "media" ? 0.0 : 1.0
-    Behavior on opacity { Anim { duration: 180 } }
+    Behavior on opacity { Anim { duration: 120 } }
 
     Behavior on implicitWidth {
         NumberAnimation {
-            duration: 320
+            duration: 180
             easing.type: Easing.BezierSpline
-            easing.bezierCurve: [0.16, 1, 0.3, 1, 1, 1]
+            easing.bezierCurve: [0.1, 0.9, 0.2, 1.0]
         }
     }
     Behavior on color { CAnim {} }
@@ -99,6 +99,8 @@ Rectangle {
             StyledText {
                 anchors.verticalCenter: parent.verticalCenter
                 text: Qt.formatDateTime(clock.date, "dddd HH:mm")
+                font.family: "Noto Sans, Cantarell, sans-serif"
+                font.pixelSize: 11
                 font.weight: Font.Medium
                 color: Theme.barFg
             }
@@ -165,7 +167,9 @@ Rectangle {
                     const full = root.artist !== "" ? `${root.artist} - ${root.title}` : root.title
                     return full.length > 24 ? full.slice(0, 23) + "…" : full
                 }
+                font.family: "Noto Sans, Cantarell, sans-serif"
                 font.weight: Font.DemiBold
+                font.pixelSize: 11
                 color: Theme.barFg
             }
 
@@ -242,6 +246,8 @@ Rectangle {
                 id: compactClock
                 anchors.verticalCenter: parent.verticalCenter
                 text: Qt.formatDateTime(clock.date, "HH:mm")
+                font.family: "Noto Sans, Cantarell, sans-serif"
+                font.pixelSize: 11
                 font.weight: Font.Medium
                 color: Theme.barMuted
             }
