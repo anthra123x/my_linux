@@ -1,5 +1,6 @@
 import QtQuick
 import Quickshell
+import Quickshell.Wayland
 import Quickshell.Hyprland
 import Quickshell.Io
 import Quickshell.Services.Pipewire
@@ -34,8 +35,9 @@ PanelWindow {
     anchors { top: true; left: true; right: true }
     exclusionMode: ExclusionMode.Auto
     implicitHeight: Theme.barHeight
-    color: Qt.alpha(Theme.barBg, 0.70)
-    Behavior on color { CAnim {} }
+    color: "transparent"
+    WlrLayershell.layer: WlrLayer.Top
+    WlrLayershell.namespace: "quickshell-bar"
 
     // One of each for every bar, made in shell.qml.
     required property Stats stats
@@ -70,21 +72,12 @@ PanelWindow {
                 onClicked: bar.toggle("tasks")
             }
         }
-
-        Capsule {
-            MediaButton {
-                id: mediaButton
-                active: bar.openPanel === "media"
-                onClicked: bar.toggle("media")
-            }
-        }
     }
 
-    Clock {
-        id: clock
+    DynamicIsland {
+        id: dynamicIsland
         anchors.centerIn: parent
-        active: bar.openPanel === "calendar"
-        onClicked: bar.toggle("calendar")
+        bar: bar
     }
 
     // Slots sit beside the built-in groups, keeping their anchors intact.
@@ -98,7 +91,7 @@ PanelWindow {
         registry: bar.pluginRegistry
         bar: bar
         placement: "center"
-        anchors { left: clock.right; leftMargin: Theme.sm; verticalCenter: parent.verticalCenter }
+        anchors { left: dynamicIsland.right; leftMargin: Theme.sm; verticalCenter: parent.verticalCenter }
     }
     PluginSlot {
         registry: bar.pluginRegistry
@@ -198,11 +191,11 @@ PanelWindow {
         bar: bar
     }
 
-    // Anchored to the clock, which is what puts it at the top centre.
+    // Anchored to the dynamic island, which is what puts it at the top centre.
     ClipboardPanel {
         bar: bar
         name: "clipboard"
-        anchorItem: clock
+        anchorItem: dynamicIsland
     }
 
     OtherScreenCatcher { bar: bar }
@@ -211,7 +204,7 @@ PanelWindow {
     ImagePickerPanel {
         bar: bar
         name: "animated_wallpapers"
-        anchorItem: clock
+        anchorItem: dynamicIsland
         title: "Fondos Animados"
         listCommand: [Quickshell.env("HOME") + "/.local/bin/animated-wallpaper-picker.sh"]
         currentCommand: [Quickshell.env("HOME") + "/.local/bin/animated-wallpaper-switcher.sh", "current"]
@@ -227,7 +220,7 @@ PanelWindow {
     ImagePickerPanel {
         bar: bar
         name: "wallpapers"
-        anchorItem: clock
+        anchorItem: dynamicIsland
         title: "Wallpaper"
         listCommand: ["sh", "-c", '"$HOME/.local/bin/hyprsimple-wallpaper-picker.sh" | "$HOME/.local/bin/hyprsimple-thumbnails.sh"']
         currentCommand: ["cat", Quickshell.env("HOME") + "/.cache/current_wallpaper_path"]
@@ -248,7 +241,7 @@ PanelWindow {
     CapturePanel {
         bar: bar
         name: "record"
-        anchorItem: clock
+        anchorItem: dynamicIsland
         title: bar.recording ? "Recording" : "Record"
         actionLabel: "Start recording"
         running: bar.recording
@@ -267,14 +260,14 @@ PanelWindow {
     KeybindsPanel {
         bar: bar
         name: "keybinds"
-        anchorItem: clock
+        anchorItem: dynamicIsland
         listCommand: [Quickshell.env("HOME") + "/.local/bin/show-keybindings.sh", "--list"]
     }
 
     CalendarPanel {
         bar: bar
         name: "calendar"
-        anchorItem: clock
+        anchorItem: dynamicIsland
     }
 
     SystemPanel {
@@ -325,7 +318,7 @@ PanelWindow {
     MediaPanel {
         bar: bar
         name: "media"
-        anchorItem: mediaButton
+        anchorItem: dynamicIsland
     }
 
     TasksPanel {

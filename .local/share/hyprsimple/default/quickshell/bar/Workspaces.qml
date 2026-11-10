@@ -26,6 +26,8 @@ Rectangle {
     implicitHeight: Theme.capsule
     radius: Theme.capsuleRadius
     color: Theme.barSurface
+    border.width: 1
+    border.color: Qt.alpha(Theme.barFg, 0.10)
     Behavior on color { CAnim {} }
     Behavior on implicitWidth { Anim {} }
 

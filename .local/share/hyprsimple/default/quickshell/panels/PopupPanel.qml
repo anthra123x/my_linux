@@ -96,7 +96,7 @@ PanelWindow {
     screen: bar.screen
     visible: open || closing.running
     anchors { top: true; bottom: true; left: true; right: true }
-    margins.top: Theme.barHeight
+    margins.top: Theme.barHeight + 4
     exclusionMode: ExclusionMode.Ignore
     color: "transparent"
     // No input while closing, so what is underneath can be clicked at once.
@@ -121,7 +121,7 @@ PanelWindow {
         id: card
 
         readonly property real fullHeight: box.implicitHeight + 2 * Theme.lg
-        readonly property real flare: Theme.panelRadius
+        readonly property real flare: 0
         // The corners cannot be rounder than the card is tall while it is still growing.
         readonly property real corner: Math.min(Theme.panelRadius, height / 2)
 
@@ -131,50 +131,53 @@ PanelWindow {
         focus: true
         Keys.onEscapePressed: panel.dismiss()
 
-        // Outline: flare in from the bar on the left, down the side, round the two bottom
-        // corners, back up, flare out to the bar on the right.
+        // Tarjeta flotante con esquinas completamente redondeadas y borde de vidrio líquido
         Shape {
-            x: -card.flare
-            width: card.width + 2 * card.flare
+            x: 0
+            width: card.width
             height: card.height
             preferredRendererType: Shape.CurveRenderer
 
             ShapePath {
-                strokeWidth: 0
-                strokeColor: "transparent"
-                fillColor: Qt.alpha(Theme.barBg, 0.70)
+                strokeWidth: 1
+                strokeColor: Qt.alpha(Theme.barFg, 0.14)
+                fillColor: Qt.alpha(Theme.barBg, 0.90)
                 Behavior on fillColor { CAnim {} }
 
-                startX: 0
+                startX: card.corner
                 startY: 0
+
+                PathLine { x: card.width - card.corner; y: 0 }
                 PathArc {
-                    x: card.flare
-                    y: Math.min(card.flare, card.height)
-                    radiusX: card.flare
-                    radiusY: Math.min(card.flare, card.height)
+                    x: card.width
+                    y: card.corner
+                    radiusX: card.corner
+                    radiusY: card.corner
+                    direction: PathArc.Clockwise
                 }
-                PathLine { x: card.flare; y: card.height - card.corner }
+                PathLine { x: card.width; y: card.height - card.corner }
                 PathArc {
-                    x: card.flare + card.corner
+                    x: card.width - card.corner
                     y: card.height
                     radiusX: card.corner
                     radiusY: card.corner
-                    direction: PathArc.Counterclockwise
+                    direction: PathArc.Clockwise
                 }
-                PathLine { x: card.flare + card.width - card.corner; y: card.height }
+                PathLine { x: card.corner; y: card.height }
                 PathArc {
-                    x: card.flare + card.width
+                    x: 0
                     y: card.height - card.corner
                     radiusX: card.corner
                     radiusY: card.corner
-                    direction: PathArc.Counterclockwise
+                    direction: PathArc.Clockwise
                 }
-                PathLine { x: card.flare + card.width; y: Math.min(card.flare, card.height) }
+                PathLine { x: 0; y: card.corner }
                 PathArc {
-                    x: 2 * card.flare + card.width
+                    x: card.corner
                     y: 0
-                    radiusX: card.flare
-                    radiusY: Math.min(card.flare, card.height)
+                    radiusX: card.corner
+                    radiusY: card.corner
+                    direction: PathArc.Clockwise
                 }
             }
         }

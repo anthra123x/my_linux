@@ -11,7 +11,7 @@ PopupPanel {
     panelWidth: 380
 
     readonly property var players: Mpris.players.values
-    property int selectedIndex: 0
+    property int selectedIndex: -1
     property real lastVolume: 0.5
 
     // Formatea segundos a m:ss
@@ -101,21 +101,22 @@ PopupPanel {
                 Rectangle {
                     required property var modelData
                     required property int index
+                    readonly property bool isSelected: root.selectedIndex === index || (root.selectedIndex === -1 && root.activePlayer === modelData)
 
                     width: tabLabel.implicitWidth + 12
                     height: 22
                     radius: 11
-                    color: root.selectedIndex === index ? Qt.alpha(Theme.accent, 0.22) : Qt.alpha(Theme.barFg, 0.06)
+                    color: isSelected ? Qt.alpha(Theme.accent, 0.22) : Qt.alpha(Theme.barFg, 0.06)
                     border.width: 1
-                    border.color: root.selectedIndex === index ? Qt.alpha(Theme.accent, 0.50) : Qt.alpha(Theme.barFg, 0.10)
+                    border.color: isSelected ? Qt.alpha(Theme.accent, 0.50) : Qt.alpha(Theme.barFg, 0.10)
 
                     StyledText {
                         id: tabLabel
                         anchors.centerIn: parent
                         text: parent.modelData.identity
                         font.pixelSize: 10
-                        font.weight: root.selectedIndex === parent.index ? Font.DemiBold : Font.Normal
-                        color: root.selectedIndex === parent.index ? Theme.accent : Theme.barMuted
+                        font.weight: parent.isSelected ? Font.DemiBold : Font.Normal
+                        color: parent.isSelected ? Theme.accent : Theme.barMuted
                     }
 
                     MouseArea {
