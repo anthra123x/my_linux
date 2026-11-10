@@ -7,12 +7,13 @@ import Quickshell.Services.Mpris
 import qs.theme
 import qs.components
 
-// Isla dinamica central tipo macOS / iOS:
-// - Reposo: Presenta la fecha y hora sincronizada (calendario).
-// - Reproduciendo: Morfismo animado expansivo con avatar circular, ecualizador visualizador animado,
-//   metadatos de la pista y reloj compacto.
-// - Interaccion: Clic izquierdo expande la isla dinamica en un reproductor completo tipo iOS;
-//   clic sobre el reloj abre el calendario; clic derecho conmuta entre reproductor y calendario.
+// Isla dinamica central tipo Apple macOS / iOS:
+// - Apariencia de hardware: Capsula de color negro solido (#000000) con trazo sutil de vidrio.
+// - Modo reposo: Badge de calendario Apple con fecha y hora digital nitida.
+// - Modo reproduccion: Caratula circular con mascara MultiEffect, metadatos sans-serif,
+//   ecualizador reactivo animado y reloj compacto.
+// - Interaccion: Clic izquierdo despliega la isla dinamica en su reproductor multimedia o en su
+//   calendario Apple; clic derecho conmuta fluidamente entre reproductor y calendario.
 Rectangle {
     id: root
 
@@ -80,19 +81,19 @@ Rectangle {
     implicitHeight: Theme.capsule
     implicitWidth: mainRow.implicitWidth + 2 * Theme.md
     radius: height / 2
-    color: root.active ? Theme.barSurface : Qt.alpha(Theme.barSurface, 0.95)
+    color: "#000000" // Negro azabache solido caracteristico de la Dynamic Island
     border.width: 1
-    border.color: root.active ? root.coverAccent : (root.isPlaying ? Qt.alpha(root.coverAccent, 0.45) : Qt.alpha(Theme.barFg, 0.12))
+    border.color: root.active ? Qt.alpha("#ffffff", 0.22) : (root.isPlaying ? Qt.alpha(root.coverAccent, 0.45) : Qt.alpha("#ffffff", 0.10))
 
     // Se desvanece suavemente cuando la isla expandida toma el control
-    opacity: bar.openPanel === "media" ? 0.0 : 1.0
-    Behavior on opacity { Anim { duration: 120 } }
+    opacity: root.active ? 0.0 : 1.0
+    Behavior on opacity { Anim { duration: 90 } }
 
     Behavior on implicitWidth {
         NumberAnimation {
             duration: 180
             easing.type: Easing.BezierSpline
-            easing.bezierCurve: [0.1, 0.9, 0.2, 1.0]
+            easing.bezierCurve: [0.16, 1, 0.3, 1, 1, 1]
         }
     }
     Behavior on color { CAnim {} }
@@ -108,27 +109,65 @@ Rectangle {
         anchors.centerIn: parent
         spacing: Theme.sm
 
-        // --- MODO REPOSO: Calendario y Reloj ---
+        // --- MODO REPOSO: Badge Apple Calendario + Fecha y Reloj ---
         Row {
             id: idleContent
             visible: !root.isPlaying
             spacing: Theme.sm
             anchors.verticalCenter: parent.verticalCenter
 
-            Icon {
+            // Icono de calendario estilo Apple (mini-badge con encabezado rojo y numero de dia)
+            Rectangle {
+                width: 16
+                height: 16
+                radius: 3.5
+                color: "#ffffff"
+                clip: true
                 anchors.verticalCenter: parent.verticalCenter
-                text: Theme.icon.calendar
-                color: Theme.secondary
-                fill: root.activeCalendar ? 1 : 0
+
+                Rectangle {
+                    anchors { top: parent.top; left: parent.left; right: parent.right }
+                    height: 4.5
+                    color: "#ff3b30"
+                }
+
+                StyledText {
+                    anchors {
+                        bottom: parent.bottom
+                        horizontalCenter: parent.horizontalCenter
+                        bottomMargin: 0.5
+                    }
+                    text: Qt.formatDateTime(clock.date, "d")
+                    font.family: "Noto Sans, Cantarell, sans-serif"
+                    font.pixelSize: 9
+                    font.weight: Font.Bold
+                    color: "#000000"
+                }
             }
 
             StyledText {
                 anchors.verticalCenter: parent.verticalCenter
-                text: Qt.formatDateTime(clock.date, "dddd HH:mm")
+                text: Qt.formatDateTime(clock.date, "ddd d MMM")
                 font.family: "Noto Sans, Cantarell, sans-serif"
                 font.pixelSize: 11
                 font.weight: Font.Medium
-                color: Theme.barFg
+                color: "#98989d"
+            }
+
+            StyledText {
+                anchors.verticalCenter: parent.verticalCenter
+                text: "•"
+                color: "#48484a"
+                font.pixelSize: 10
+            }
+
+            StyledText {
+                anchors.verticalCenter: parent.verticalCenter
+                text: Qt.formatDateTime(clock.date, "HH:mm")
+                font.family: "Noto Sans, Cantarell, sans-serif"
+                font.pixelSize: 11
+                font.weight: Font.DemiBold
+                color: "#ffffff"
             }
         }
 
@@ -196,7 +235,7 @@ Rectangle {
                 font.family: "Noto Sans, Cantarell, sans-serif"
                 font.weight: Font.DemiBold
                 font.pixelSize: 11
-                color: Theme.barFg
+                color: "#ffffff"
             }
 
             // Ecualizador animado (barras reactivas en el extremo derecho de la isla compacta)
@@ -263,7 +302,7 @@ Rectangle {
             StyledText {
                 anchors.verticalCenter: parent.verticalCenter
                 text: "•"
-                color: Theme.barMuted
+                color: "#48484a"
                 font.pixelSize: 10
             }
 
@@ -275,7 +314,7 @@ Rectangle {
                 font.family: "Noto Sans, Cantarell, sans-serif"
                 font.pixelSize: 11
                 font.weight: Font.Medium
-                color: Theme.barMuted
+                color: "#98989d"
             }
         }
     }
@@ -284,7 +323,7 @@ Rectangle {
     Rectangle {
         anchors.fill: parent
         radius: parent.radius
-        color: Theme.tint(islandMouse.containsMouse ? Theme.tintHover : 0)
+        color: islandMouse.containsMouse ? Qt.alpha("#ffffff", 0.08) : "transparent"
         Behavior on color { CAnim {} }
     }
 
@@ -310,7 +349,7 @@ Rectangle {
             }
 
             // Clic izquierdo:
-            if (root.hasMedia) {
+            if (root.hasMedia && root.isPlaying) {
                 // Si pulsa sobre el area del reloj compacto (ultimos 48px a la derecha)
                 if (mouse.x > root.width - 48) {
                     bar.toggle("calendar")
@@ -319,17 +358,20 @@ Rectangle {
                     bar.toggle("media")
                 }
             } else {
-                // Si no hay musica disponible, abre el calendario
+                // Si no hay musica reproduciendose, abre el calendario en la isla dinamica
                 bar.toggle("calendar")
             }
         }
     }
 
+    scale: islandMouse.pressed ? 0.97 : (islandMouse.containsMouse ? 1.02 : 1.0)
+    Behavior on scale { Anim { duration: 90 } }
+
     Tooltip {
         target: root
         text: root.hasMedia
-            ? (root.artist !== "" ? `${root.artist}: ${root.title} (Clic para expandir isla)` : `${root.title} (Clic para expandir isla)`)
-            : Qt.formatDate(clock.date, "dddd, d MMMM yyyy")
+            ? (root.artist !== "" ? `${root.artist}: ${root.title} (Clic para expandir)` : `${root.title} (Clic para expandir)`)
+            : Qt.formatDate(clock.date, "dddd, d MMMM yyyy (Clic para expandir)")
         hovered: islandMouse.containsMouse && !root.active
     }
 }

@@ -6,18 +6,20 @@ Provee la suite de interfaz de usuario de escritorio en Wayland mediante Quicksh
 ## 2. Contratos y API
 - **DynamicIsland.qml**:
   - Propiedades obligatorias: `required property var bar`.
-  - Estados: Modo reposo (reloj + calendario) y modo multimedia activo (caratula circular, titulo/artista, ecualizador animado, reloj compacto).
+  - Estados:
+    - Modo reposo: Capsula solida negra azabache (`#000000`) con badge Apple de calendario (encabezado rojo y dia), fecha y hora digital nitida.
+    - Modo multimedia: Caratula circular con mascara MultiEffect, metadatos de pista sans-serif, ecualizador reactivo animado y reloj compacto.
   - Interaccion:
-    - Clic izquierdo sobre area multimedia: Despliega/contrae la isla dinamica expandida (`bar.toggle("media")`).
-    - Clic izquierdo sobre reloj lateral: Despliega/contrae `CalendarPanel`.
-    - Clic derecho: Conmuta alternativamente entre reproductor y calendario.
+    - Clic izquierdo sobre area multimedia: Despliega/contrae el reproductor expandido de la isla dinamica (`bar.toggle("media")`).
+    - Clic izquierdo en reposo (o sobre reloj compacto): Despliega/contrae el calendario Apple integrado en la isla dinamica (`bar.toggle("calendar")`).
+    - Clic derecho: Conmuta alternativamente entre reproductor y calendario sin cerrar la isla.
 - **DynamicIslandExpanded.qml**:
   - Propiedades obligatorias: `required property var bar`, `property Item anchorItem`.
-  - Morfismo espacial: Se expande desde la geometria de la isla compacta (220x24 px) hasta la tarjeta de reproduccion completa (420x180 px, radio de 36 px) sin alterar la geometria de ventanas en Hyprland (`ExclusionMode.Ignore`).
-  - Caratula circular recortada mediante `MultiEffect` (QtQuick.Effects), titulo en negrita y artista subordinado.
-  - Linea de tiempo interactiva (scrubber) con cabezal deslizante (thumb knob) y tiempos numericos transcurrido y restante.
-  - Controles multimedia dedicados: Shuffle, Anterior, Boton central solido blanco circular con icono negro de Play/Pausa, Siguiente, Repetir.
-  - Atmosfera adaptativa: Gradiente de resplandor ambiental inferior e iluminacion perimetral sincronizada reactivamente con la aplicacion activa (Spotify verde, Brave naranja, Firefox naranja-rojizo, etc.).
+  - Contenedor unificado: Soporta modo multimedia (`bar.openPanel === "media"`, 400x165 px, radio 36 px) y modo calendario (`bar.openPanel === "calendar"`, 330x360 px, radio 32 px).
+  - Morfismo espacial: Se expande desde la geometria de la isla compacta (ancho y alto del anclaje, radio de capsula `height / 2`) hasta la tarjeta final mediante fisica Apple Fluid de 6 puntos (`[0.16, 1, 0.3, 1, 1, 1]`).
+  - Cross-fade interno: Capa compacta intermedia que se desvanece suavemente en el primer tercio de la expansion, dando paso a los controles expandidos con escala y opacidad progresivas sin recortes de elementos.
+  - Reproductor multimedia: Caratula circular, titulo, artista, scrubber interactivo en una sola fila, boton Play/Pausa hero blanco con barras de pausa geometricas e iluminacion ambiental difusa adaptativa a la caratula.
+  - Calendario Apple integrado: Cabecera con fecha en rojo Apple (`#ff3b30`), mes y año con botones circulares de navegacion, fila de dias y cuadricula `MonthGrid` con indicador circular de dia actual y soporte para rueda de raton.
 - **TasksButton.qml / TasksPanel.qml**:
   - Consumo de eventos Hyprland IPC mediante `Quickshell.Hyprland` (`Hyprland.toplevels.values`) con filtrado de superficies invalidas/auxiliares.
   - Despachadores IPC compatibles con Hyprland 0.57+ Lua (`hl.dsp.window.close` y `hl.dsp.focus`).
@@ -49,17 +51,17 @@ Provee la suite de interfaz de usuario de escritorio en Wayland mediante Quicksh
 5. Al hacer clic sobre la isla o invocar `bar.toggle("media")`, la isla compacta transiciona su opacidad a 0 mientras `DynamicIslandExpanded` despliega el reproductor completo desde el borde superior de la barra, animando anchura, altura y radio de curvatura.
 
 ## 6. Decisiones de Diseño y Gotchas
-- **Morfismo integrado sin desplazar ventanas**: `DynamicIslandExpanded` se implementa en un `PanelWindow` overlay con `exclusionMode: ExclusionMode.Ignore` y `margins.top: -Theme.barHeight`, permitiendo que la tarjeta se extienda desde y=3 px directamente sobre la barra sin obligar a Hyprland a reacomodar ventanas en mosaico.
-- **Caratulas circulares con MultiEffect**: En Qt Quick, la propiedad `clip: true` en un `Rectangle` unicamente recorta sobre el cuadro delimitador rectangular. Se incorporo `QtQuick.Effects` con `MultiEffect` y mascara de capa para renderizar carátulas estrictamente circulares tanto en modo compacto como expandido.
+- **Morfismo unificado y supresion de popups desvinculados**: El calendario ya no se despliega como una ventana emergente rectangular separada bajo la barra. Se integro directamente en `DynamicIslandExpanded`, permitiendo que la propia isla dinamica se expanda fisicamente hacia abajo tanto en modo multimedia como en modo calendario, preservando la continuidad de la capsula central.
+- **Correccion de curvas Bezier de 6 puntos en Qt Quick**: La propiedad `easing.bezierCurve` para `Easing.BezierSpline` exige estrictamente un arreglo de 6 valores (`[c1x, c1y, c2x, c2y, 1, 1]`). La falta de los ultimos dos valores impedia que la interpolacion completara el recorrido, ocasionando interrupciones abruptas en el despliegue.
+- **Cross-fade interno multinivel**: Para erradicar cualquier parpadeo o visualizacion prematura de controles recortados a mitad de despliegue, el contenedor morfico presenta una capa intermedia compacta que se desvanece en los primeros 70 ms, mientras la vista expandida (reproductor o calendario) escala suavemente desde 0.94 hasta 1.0 con ganancia progresiva de opacidad.
 - **Resplandor ambiental adaptativo segun la caratula**: Implementacion del script `dynamic-island-color.py` que analiza la paleta de la caratula de la pista activa en espacio HSL para extraer el tono vibrante dominante (con cache de respuesta instantanea en memoria/disco). Se aplica mediante foco desenfocado con `MultiEffect` (`blur: 1.0`, `blurMax: 32`) y gradiente vertical restringido estrictamente al `radius` del contenedor, eliminando cualquier fuga o corte rectangular en las esquinas.
-- **Bordes redondeados de alta fidelidad**: Se ajusto el radio a 38 px con trazo sutil de vidrio blanco translucido (`Qt.alpha("#ffffff", 0.08)`), eliminando bordes de colores duros y respetando la curvatura squircle de iOS.
-- **Accion de cabecera circular (+)**: Se incorporo el boton de accion perimetral circular en la esquina superior derecha tal como en la referencia.
+- **Estetica Apple en modo reposo**: Se erradico el fondo gris generico y el icono de calendario purpura antiguo. La isla en reposo adopta un cuerpo solido negro azabache (`#000000`), mini-badge Apple de calendario con franja roja y numero de dia, tipografia sans-serif calibrada y reloj digital en blanco puro.
 
 ## 7. Estado y Ultimos Cambios
-- Extraccion cromatica reactiva por cancion via `dynamic-island-color.py` para iluminacion ambiental tanto en la isla compacta como en la expandida.
-- Correccion integral de esquinas: erradicacion de artefactos triangulares en los bordes inferiores acoplando el radio de los gradientes internos.
-- Ajuste de proporciones (400x162 px, radio 38 px) y boton (+) de referencia.
-- Verificacion visual validada en Spotify bajo reproduccion activa y reposo.
+- Rediseño integral de la Isla Dinamica en modo reposo: estilo de hardware Apple en negro azabache solido, mini-badge de calendario y hora digital de alta precision.
+- Unificacion del calendario mensual interactivo dentro del contenedor morfico de la Isla Dinamica, eliminando la ventana flotante desvinculada `CalendarPanel`.
+- Correccion de la fisica de interpolacion BezierSpline a 6 puntos (`[0.16, 1, 0.3, 1, 1, 1]` y `[0.38, 0.0, 0.20, 1.0, 1, 1]`) garantizando un despliegue y repliegue 100% fluido.
+- Validacion visual y funcional de la transicion entre reposo, reproduccion activa en Spotify, despliegue de reproductor y despliegue de calendario.
 
 ## 8. Como Verificar
 1. Reiniciar Quickshell: `pkill qs && qs -d -p ~/.local/share/hyprsimple/default/quickshell`

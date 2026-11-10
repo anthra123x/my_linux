@@ -264,12 +264,6 @@ PanelWindow {
         listCommand: [Quickshell.env("HOME") + "/.local/bin/show-keybindings.sh", "--list"]
     }
 
-    CalendarPanel {
-        bar: bar
-        name: "calendar"
-        anchorItem: dynamicIsland
-    }
-
     SystemPanel {
         bar: bar
         name: "system"
