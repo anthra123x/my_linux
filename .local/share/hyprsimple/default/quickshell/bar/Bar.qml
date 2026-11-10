@@ -315,9 +315,8 @@ PanelWindow {
         anchorItem: powerButton
     }
 
-    MediaPanel {
+    DynamicIslandExpanded {
         bar: bar
-        name: "media"
         anchorItem: dynamicIsland
     }
 
