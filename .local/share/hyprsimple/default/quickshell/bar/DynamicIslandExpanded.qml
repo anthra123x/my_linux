@@ -187,7 +187,7 @@ PanelWindow {
 
         // Geometria objetivo expandida segun el modo
         readonly property real targetExpandedWidth: root.isMedia ? 400 : 330
-        readonly property real targetExpandedHeight: root.isMedia ? 165 : 360
+        readonly property real targetExpandedHeight: root.isMedia ? 165 : 288
         readonly property real targetExpandedRadius: root.isMedia ? 36 : 32
 
         property real morphWidth: targetExpandedWidth
@@ -819,7 +819,7 @@ PanelWindow {
                 anchors.bottomMargin: 14
                 anchors.leftMargin: 18
                 anchors.rightMargin: 18
-                spacing: 10
+                spacing: 8
                 visible: root.isCalendar && opacity > 0.01
                 opacity: Math.max(0.0, (root.progress - 0.25) / 0.75)
                 scale: 0.94 + 0.06 * root.progress
@@ -829,7 +829,7 @@ PanelWindow {
                     width: parent.width
 
                     ColumnLayout {
-                        spacing: 2
+                        spacing: 1
                         Layout.fillWidth: true
 
                         StyledText {
@@ -840,17 +840,50 @@ PanelWindow {
                             color: "#ff453a"
                         }
 
-                        StyledText {
-                            text: root.weekLocale.standaloneMonthName(root.calMonth) + " " + root.calYear
-                            font.family: "Noto Sans, Cantarell, sans-serif"
-                            font.pixelSize: 17
-                            font.weight: Font.Bold
-                            color: "#ffffff"
+                        Row {
+                            spacing: 8
+                            Layout.alignment: Qt.AlignVCenter
 
-                            MouseArea {
-                                anchors.fill: parent
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: root.showToday()
+                            StyledText {
+                                text: root.weekLocale.standaloneMonthName(root.calMonth) + " " + root.calYear
+                                font.family: "Noto Sans, Cantarell, sans-serif"
+                                font.pixelSize: 17
+                                font.weight: Font.Bold
+                                color: "#ffffff"
+
+                                MouseArea {
+                                    anchors.fill: parent
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: root.showToday()
+                                }
+                            }
+
+                            // Badge interactivo "Hoy" si se esta viendo otro mes
+                            Rectangle {
+                                anchors.verticalCenter: parent.verticalCenter
+                                visible: root.calMonth !== clock.date.getMonth() || root.calYear !== clock.date.getFullYear()
+                                implicitHeight: 18
+                                implicitWidth: todayBadgeText.implicitWidth + 12
+                                radius: 9
+                                color: Qt.alpha("#ff453a", 0.18)
+                                border.width: 1
+                                border.color: Qt.alpha("#ff453a", 0.40)
+
+                                StyledText {
+                                    id: todayBadgeText
+                                    anchors.centerIn: parent
+                                    text: "Hoy"
+                                    font.family: "Noto Sans, Cantarell, sans-serif"
+                                    font.pixelSize: 9
+                                    font.weight: Font.Bold
+                                    color: "#ff453a"
+                                }
+
+                                MouseArea {
+                                    anchors.fill: parent
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: root.showToday()
+                                }
                             }
                         }
                     }
@@ -912,7 +945,7 @@ PanelWindow {
 
                 // 2. Fila de iniciales de dias de la semana (L M X J V S D)
                 DayOfWeekRow {
-                    width: 7 * Theme.cellSize
+                    width: 7 * 38
                     anchors.horizontalCenter: parent.horizontalCenter
                     locale: root.weekLocale
                     spacing: 0
@@ -929,11 +962,11 @@ PanelWindow {
                     }
                 }
 
-                // 3. Cuadricula del mes MonthGrid
+                // 3. Cuadricula del mes MonthGrid (ajustada exactamente al alto de 6 filas)
                 Item {
-                    width: 7 * Theme.cellSize
+                    width: 7 * 38
                     anchors.horizontalCenter: parent.horizontalCenter
-                    height: calDays.implicitHeight > 0 ? calDays.implicitHeight : 6 * Theme.cellSize
+                    height: 6 * 31
                     clip: true
 
                     WheelHandler {
@@ -958,24 +991,24 @@ PanelWindow {
                             id: cell
                             required property var model
 
-                            implicitWidth: Theme.cellSize
-                            implicitHeight: Theme.cellSize
+                            implicitWidth: 38
+                            implicitHeight: 31
                             opacity: cell.model.month === root.calMonth ? 1.0 : 0.35
 
                             Rectangle {
                                 anchors.centerIn: parent
-                                width: Theme.cellSize - Theme.xs
-                                height: width
-                                radius: width / 2
+                                width: 26
+                                height: 26
+                                radius: 13
                                 visible: cell.model.today
                                 color: "#ff3b30"
                             }
 
                             Rectangle {
                                 anchors.centerIn: parent
-                                width: Theme.cellSize - Theme.xs
-                                height: width
-                                radius: width / 2
+                                width: 26
+                                height: 26
+                                radius: 13
                                 visible: !cell.model.today && (cell.model.month === root.calMonth) && cellMouse.containsMouse
                                 color: Qt.alpha("#ffffff", 0.10)
                             }
@@ -995,39 +1028,6 @@ PanelWindow {
                                 hoverEnabled: true
                                 cursorShape: Qt.PointingHandCursor
                             }
-                        }
-                    }
-                }
-
-                // 4. Accion de retorno a "Hoy" si se navega a otro mes
-                RowLayout {
-                    width: parent.width
-                    visible: root.calMonth !== clock.date.getMonth() || root.calYear !== clock.date.getFullYear()
-
-                    Item { Layout.fillWidth: true }
-
-                    Rectangle {
-                        implicitHeight: 22
-                        implicitWidth: todayLabel.implicitWidth + 16
-                        radius: 11
-                        color: Qt.alpha("#ffffff", 0.08)
-                        border.width: 1
-                        border.color: Qt.alpha("#ffffff", 0.10)
-
-                        StyledText {
-                            id: todayLabel
-                            anchors.centerIn: parent
-                            text: "Ir a hoy"
-                            font.family: "Noto Sans, Cantarell, sans-serif"
-                            font.pixelSize: 10
-                            font.weight: Font.Medium
-                            color: "#ff453a"
-                        }
-
-                        MouseArea {
-                            anchors.fill: parent
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: root.showToday()
                         }
                     }
                 }

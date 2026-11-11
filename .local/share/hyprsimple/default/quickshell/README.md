@@ -15,7 +15,7 @@ Provee la suite de interfaz de usuario de escritorio en Wayland mediante Quicksh
     - Clic derecho: Conmuta alternativamente entre reproductor y calendario sin cerrar la isla.
 - **DynamicIslandExpanded.qml**:
   - Propiedades obligatorias: `required property var bar`, `property Item anchorItem`.
-  - Contenedor unificado: Soporta modo multimedia (`bar.openPanel === "media"`, 400x165 px, radio 36 px) y modo calendario (`bar.openPanel === "calendar"`, 330x360 px, radio 32 px).
+  - Contenedor unificado: Soporta modo multimedia (`bar.openPanel === "media"`, 400x165 px, radio 36 px) y modo calendario (`bar.openPanel === "calendar"`, 330x288 px, radio 32 px).
   - Morfismo espacial: Se expande desde la geometria de la isla compacta (ancho y alto del anclaje, radio de capsula `height / 2`) hasta la tarjeta final mediante fisica Apple Fluid de 6 puntos (`[0.16, 1, 0.3, 1, 1, 1]`).
   - Cross-fade interno: Capa compacta intermedia que se desvanece suavemente en el primer tercio de la expansion, dando paso a los controles expandidos con escala y opacidad progresivas sin recortes de elementos.
   - Reproductor multimedia: Caratula circular, titulo, artista, scrubber interactivo en una sola fila, boton Play/Pausa hero blanco con barras de pausa geometricas e iluminacion ambiental difusa adaptativa a la caratula.
